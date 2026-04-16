@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { Box, AppBar, Toolbar, Button, Typography } from '@mui/material';
+import React, { useState, useEffect } from 'react';
+import { Box, AppBar, Toolbar, Button, Typography, Badge } from '@mui/material';
 import { AuthProvider, useAuth } from './AuthContext';
 import { AuthModal } from './AuthModal';
 import { LessonRenderer } from './LessonRenderer_v2';
 import { LessonLibrary } from './LessonLibrary';
+import { DailyReview } from './DailyReview';
 import { BookOpen, LogOut } from 'lucide-react';
 
 // Sample lesson for demonstration
@@ -174,16 +175,25 @@ useEffect(() => {
 };
 
 interface AppProps {
-  initialView?: 'library' | 'lesson' | 'home';
+  initialView?: 'library' | 'lesson' | 'home' | 'review';
 }
 
 const AppContent: React.FC<AppProps> = ({ initialView = 'home' }) => {
-  const { isAuthenticated, user, logout } = useAuth();
-  const [currentView, setCurrentView] = useState<'library' | 'lesson' | 'home'>(
+  const { isAuthenticated, user, logout, api } = useAuth();
+  const [currentView, setCurrentView] = useState<'library' | 'lesson' | 'home' | 'review'>(
     initialView
   );
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null);
+  const [dueCount, setDueCount] = useState(0);
+
+  // Fetch review due count whenever auth state changes
+  useEffect(() => {
+    if (!isAuthenticated) { setDueCount(0); return; }
+    api.get('/api/review/stats')
+      .then((res) => setDueCount(res.data.due_today ?? 0))
+      .catch(() => setDueCount(0));
+  }, [isAuthenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSelectLesson = (lessonId: string) => {
     setSelectedLessonId(lessonId);
@@ -214,6 +224,15 @@ const AppContent: React.FC<AppProps> = ({ initialView = 'home' }) => {
                 >
                   My Library
                 </Button>
+                <Badge badgeContent={dueCount || undefined} color="error">
+                  <Button
+                    variant={currentView === 'review' ? 'contained' : 'outlined'}
+                    onClick={() => setCurrentView('review')}
+                    size="small"
+                  >
+                    🧠 Review
+                  </Button>
+                </Badge>
                 <Typography variant="body2" className="text-slate-600">
                   {user?.username}
                 </Typography>
@@ -300,6 +319,10 @@ const AppContent: React.FC<AppProps> = ({ initialView = 'home' }) => {
         <LessonLibrary onSelectLesson={handleSelectLesson} />
       )}
 
+      {currentView === 'review' && isAuthenticated && (
+        <DailyReview onBack={() => setCurrentView('home')} />
+      )}
+
       {currentView === 'lesson' && (
         <LessonRenderer lessonData={SAMPLE_LESSON} />
       )}
@@ -310,8 +333,7 @@ const AppContent: React.FC<AppProps> = ({ initialView = 'home' }) => {
   );
 };
 
-export default function App({ initialView = 'home' }: AppProps) {
-  return (
+export default function App({ initialView = 'home' }: AppProps) {  return (
     <AuthProvider>
       <AppContent initialView={initialView} />
     </AuthProvider>

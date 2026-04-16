@@ -152,3 +152,51 @@ Remember: Exactly 3 steps, with quiz/exercise/visualization. Follow the schema p
         """
         wrapper = self.generate_lesson(code, context, url, source_model, difficulty)
         return wrapper.model_dump()
+
+    def generate_misconception_explanation(
+        self,
+        question: str,
+        wrong_answer: str,
+        correct_answer: str,
+        lesson_context: str = "",
+    ) -> dict:
+        """
+        Generate a compassionate micro-lesson explaining why a wrong quiz answer was wrong.
+
+        Returns a dict with three keys:
+            why_it_seemed_right   — validates the confusion (1-2 sentences)
+            correct_mental_model  — explains the right concept clearly (2-3 sentences)
+            analogy               — memorable real-world analogy (1 sentence)
+        """
+        prompt = f"""A student answered a quiz question incorrectly. Generate a compassionate,
+concise micro-lesson (< 80 words total) that helps them understand their mistake.
+
+QUESTION: {question}
+STUDENT'S ANSWER (wrong): {wrong_answer}
+CORRECT ANSWER: {correct_answer}
+LESSON CONTEXT: {lesson_context[:500] if lesson_context else "general programming concept"}
+
+Respond with ONLY valid JSON — no markdown, no wrapper:
+{{
+  "why_it_seemed_right": "1-2 sentences validating why their wrong answer was a reasonable guess",
+  "correct_mental_model": "2-3 sentences explaining the correct concept clearly",
+  "analogy": "One memorable real-world analogy that makes the correct answer stick"
+}}"""
+
+        response = self.model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.4,
+                max_output_tokens=512,
+            ),
+        )
+
+        text = response.text.strip()
+
+        # Strip markdown code fences if present
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
+
+        return json.loads(text)

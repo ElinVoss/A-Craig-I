@@ -32,6 +32,7 @@ class User(Base):
     progress = relationship("UserProgress", back_populates="user", cascade="all, delete-orphan")
     ratings = relationship("LessonRating", back_populates="user", cascade="all, delete-orphan")
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
+    review_cards = relationship("ReviewCard", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User {self.email}>"
@@ -59,6 +60,7 @@ class Lesson(Base):
     user = relationship("User", back_populates="lessons")
     progress = relationship("UserProgress", back_populates="lesson", cascade="all, delete-orphan")
     ratings = relationship("LessonRating", back_populates="lesson", cascade="all, delete-orphan")
+    review_card = relationship("ReviewCard", back_populates="lesson", uselist=False, cascade="all, delete-orphan")
 
     # Indexes
     __table_args__ = (
@@ -124,6 +126,62 @@ class LessonRating(Base):
 
     def __repr__(self):
         return f"<LessonRating lesson={self.lesson_id} rating={self.rating}>"
+
+
+class ReviewCard(Base):
+    """
+    Spaced repetition card linked to a saved lesson.
+    One card per lesson per user — the card represents recall of the whole lesson.
+    Future: one card per lesson STEP for granular repetition.
+    """
+    __tablename__ = "review_cards"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    lesson_id = Column(UUID(as_uuid=True), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False)
+
+    # SM-2 state
+    easiness_factor = Column(DECIMAL(4, 2), default=2.5)
+    interval_days = Column(Integer, default=1)
+    repetitions = Column(Integer, default=0)
+
+    # Scheduling
+    due_date = Column(DateTime(timezone=True), default=datetime.utcnow)
+    last_reviewed_at = Column(DateTime(timezone=True))
+
+    # Metadata
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    is_suspended = Column(Boolean, default=False)  # User can pause a card
+
+    # Relationships
+    user = relationship("User", back_populates="review_cards")
+    lesson = relationship("Lesson", back_populates="review_card")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'lesson_id', name='uq_user_lesson_card'),
+        Index('idx_review_cards_due', 'user_id', 'due_date'),
+    )
+
+    def __repr__(self):
+        return f"<ReviewCard user={self.user_id} due={self.due_date}>"
+
+
+class ReviewLog(Base):
+    """Every review attempt, immutable. Used for analytics and future FSRS training."""
+    __tablename__ = "review_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    card_id = Column(UUID(as_uuid=True), ForeignKey("review_cards.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    rating = Column(Integer, nullable=False)           # 1=Again, 2=Hard, 3=Good, 4=Easy
+    reviewed_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    interval_before = Column(Integer)                  # interval before this review
+    easiness_before = Column(DECIMAL(4, 2))            # EF before this review
+
+    __table_args__ = (
+        Index('idx_review_logs_card', 'card_id'),
+        Index('idx_review_logs_user_date', 'user_id', 'reviewed_at'),
+    )
 
 
 class RefreshToken(Base):

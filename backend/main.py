@@ -12,13 +12,14 @@ from sqlalchemy import func
 from lesson_generator import LessonGenerator
 from schemas import Lesson
 from database import get_db, init_db, check_db_health
-from models import User, Lesson as LessonModel, UserProgress, LessonRating, RefreshToken
+from models import User, Lesson as LessonModel, UserProgress, LessonRating, RefreshToken, ReviewCard, ReviewLog
 from auth import (
     hash_password, verify_password, 
     create_token_pair, decode_access_token, decode_refresh_token,
     hash_token, verify_token_hash,
     validate_password_strength, TokenResponse, REFRESH_TOKEN_EXPIRE_DAYS
 )
+from srs import CardState, sm2_schedule
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -549,6 +550,255 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
         "created_at": current_user.created_at.isoformat(),
         "is_active": current_user.is_active,
     }
+
+
+
+
+# ===== SPACED REPETITION ENDPOINTS =====
+
+class ReviewRatingRequest(BaseModel):
+    card_id: str
+    rating: int = Field(..., ge=1, le=4, description="1=Again 2=Hard 3=Good 4=Easy")
+
+
+@app.post("/api/lessons/{lesson_id}/enqueue")
+async def enqueue_lesson_for_review(
+    lesson_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Create a review card for a lesson (called automatically after lesson completion).
+    Idempotent — safe to call multiple times.
+    """
+    lesson = db.query(LessonModel).filter(
+        LessonModel.id == lesson_id,
+        LessonModel.user_id == current_user.id
+    ).first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+
+    existing = db.query(ReviewCard).filter(
+        ReviewCard.user_id == current_user.id,
+        ReviewCard.lesson_id == lesson_id
+    ).first()
+    if existing:
+        return {"status": "exists", "card_id": str(existing.id)}
+
+    card = ReviewCard(user_id=current_user.id, lesson_id=lesson_id)
+    db.add(card)
+    db.commit()
+    db.refresh(card)
+    logger.info(f"📇 Review card created for lesson {lesson_id}")
+    return {"status": "created", "card_id": str(card.id)}
+
+
+@app.get("/api/review/due")
+async def get_due_cards(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Return cards due for review today, ordered by urgency (most overdue first).
+    """
+    now = datetime.utcnow()
+    cards = (
+        db.query(ReviewCard, LessonModel)
+        .join(LessonModel, ReviewCard.lesson_id == LessonModel.id)
+        .filter(
+            ReviewCard.user_id == current_user.id,
+            ReviewCard.due_date <= now,
+            ReviewCard.is_suspended == False,
+        )
+        .order_by(ReviewCard.due_date.asc())
+        .all()
+    )
+
+    return {
+        "status": "success",
+        "due_count": len(cards),
+        "cards": [
+            {
+                "card_id": str(card.id),
+                "lesson_id": str(card.lesson_id),
+                "lesson_title": lesson.title,
+                "lesson_description": lesson.description,
+                "lesson_difficulty": lesson.difficulty,
+                "interval_days": card.interval_days,
+                "repetitions": card.repetitions,
+                "days_overdue": max(0, (now - card.due_date).days),
+            }
+            for card, lesson in cards
+        ],
+    }
+
+
+@app.post("/api/review/complete")
+async def complete_review(
+    body: ReviewRatingRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Submit a review rating. Applies SM-2 algorithm, schedules next review.
+
+    Rating meanings:
+      1 = Again  — complete blackout, see again in 1 day
+      2 = Hard   — wrong but close, short interval
+      3 = Good   — correct, normal interval
+      4 = Easy   — effortless recall, longer interval
+    """
+    card = db.query(ReviewCard).filter(
+        ReviewCard.id == body.card_id,
+        ReviewCard.user_id == current_user.id,
+    ).first()
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    # Snapshot state before update (for review log)
+    interval_before = card.interval_days
+    ef_before = float(card.easiness_factor)
+
+    # Apply SM-2
+    state = CardState(
+        easiness_factor=float(card.easiness_factor),
+        interval_days=card.interval_days,
+        repetitions=card.repetitions,
+        due_date=card.due_date,
+    )
+    updated = sm2_schedule(state, body.rating)
+
+    card.easiness_factor = updated.easiness_factor
+    card.interval_days = updated.interval_days
+    card.repetitions = updated.repetitions
+    card.due_date = updated.due_date
+    card.last_reviewed_at = updated.last_reviewed_at
+
+    # Write immutable review log
+    log = ReviewLog(
+        card_id=card.id,
+        user_id=current_user.id,
+        rating=body.rating,
+        interval_before=interval_before,
+        easiness_before=ef_before,
+    )
+    db.add(log)
+    db.commit()
+
+    logger.info(f"✅ Review complete: rating={body.rating} next_review={card.due_date.date()}")
+    return {
+        "status": "success",
+        "next_review_in_days": card.interval_days,
+        "next_review_date": card.due_date.isoformat(),
+        "repetitions": card.repetitions,
+        "easiness_factor": float(card.easiness_factor),
+    }
+
+
+@app.get("/api/review/stats")
+async def get_review_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Aggregate review statistics for the current user."""
+    now = datetime.utcnow()
+    total_cards = db.query(ReviewCard).filter(ReviewCard.user_id == current_user.id).count()
+    due_today = db.query(ReviewCard).filter(
+        ReviewCard.user_id == current_user.id,
+        ReviewCard.due_date <= now,
+        ReviewCard.is_suspended == False,
+    ).count()
+    total_reviews = db.query(ReviewLog).filter(ReviewLog.user_id == current_user.id).count()
+
+    # Reviews in last 7 days
+    week_ago = now - timedelta(days=7)
+    reviews_this_week = db.query(ReviewLog).filter(
+        ReviewLog.user_id == current_user.id,
+        ReviewLog.reviewed_at >= week_ago,
+    ).count()
+
+    return {
+        "status": "success",
+        "total_cards": total_cards,
+        "due_today": due_today,
+        "total_reviews": total_reviews,
+        "reviews_this_week": reviews_this_week,
+    }
+
+
+# ===== MISCONCEPTION MICRO-LESSON ENDPOINT =====
+
+class MisconceptionRequest(BaseModel):
+    question: str
+    wrong_answer: str
+    correct_answer: str
+    lesson_context: str = ""
+
+
+@app.post("/api/misconception")
+async def generate_misconception_lesson(body: MisconceptionRequest):
+    """
+    Generate a 60-second micro-lesson explaining why a quiz answer was wrong.
+
+    Called automatically by MisconceptionModal.tsx when a user answers incorrectly.
+    No authentication required — friction here reduces engagement.
+
+    Returns:
+        micro_lesson: { why_it_seemed_right, correct_mental_model, analogy }
+    """
+    if not lesson_generator:
+        raise HTTPException(
+            status_code=503,
+            detail="Lesson generation service unavailable. Set GEMINI_API_KEY."
+        )
+
+    try:
+        micro = lesson_generator.generate_misconception_explanation(
+            question=body.question,
+            wrong_answer=body.wrong_answer,
+            correct_answer=body.correct_answer,
+            lesson_context=body.lesson_context,
+        )
+        return {"status": "success", "micro_lesson": micro}
+    except Exception as e:
+        logger.error(f"❌ Misconception generation failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate explanation.")
+
+
+# ===== CODE EXECUTION ENDPOINT =====
+
+class ExecuteRequest(BaseModel):
+    code: str = Field(..., max_length=10_000)
+    language: str = Field(default="python", description="python | javascript")
+
+
+@app.post("/api/execute")
+async def execute_code(body: ExecuteRequest):
+    """
+    Server-side code execution safety valve.
+    For Python: frontend uses Pyodide (no server call needed).
+    For JS: frontend uses sandboxed iframe (no server call needed).
+    This endpoint exists as a fallback for languages Pyodide doesn't support
+    and as the future Judge0 proxy when multi-language support is added.
+
+    Current implementation: returns a clear message directing client to
+    use the in-browser runners (Pyodide/iframe) which are already wired
+    in CodeRunner.tsx.
+    """
+    lang = body.language.lower()
+    if lang in ("python", "javascript", "js", "typescript", "ts"):
+        # These run client-side — the frontend CodeRunner component handles them.
+        # This endpoint should not be called for these languages.
+        return {
+            "status": "client_side",
+            "message": f"{body.language} execution is handled client-side via Pyodide/iframe. No server round-trip needed.",
+        }
+
+    # Future: proxy to self-hosted Judge0 for other languages (Go, Rust, Java, etc.)
+    raise HTTPException(
+        status_code=501,
+        detail=f"Server-side execution for '{body.language}' not yet available. Coming in Phase 5."
+    )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   Card,
@@ -13,21 +13,22 @@ import {
   FormControlLabel,
   TextField,
   Alert,
-  Paper,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
-  CircularProgress,
   Chip,
   LinearProgress,
   AppBar,
   Toolbar,
   Menu,
   MenuItem,
+  Snackbar,
 } from '@mui/material';
-import { CheckCircle, XCircle, Code, Lightbulb, Route, Save, BookOpen, LogOut } from 'lucide-react';
+import { Code, Lightbulb, Route, Save, BookOpen } from 'lucide-react';
 import { useAuth } from './AuthContext';
+import CodeRunner from './CodeRunner';
+import { MisconceptionModal } from './MisconceptionModal';
 
 // Type definitions
 interface QuizOption {
@@ -54,11 +55,19 @@ interface Exercise {
   solution: string;
 }
 
+interface CodeHighlight {
+  language: string;
+  snippet: string;
+}
+
 interface StepContent {
   headline: string;
   explanation?: string;
   keyTakeaway?: string;
+  /** Legacy flat snippet (App_v2 sample data) */
   codeSnippet?: string;
+  /** Backend-generated snippet with language metadata */
+  codeHighlight?: CodeHighlight;
   quiz?: Quiz;
   exercise?: Exercise;
 }
@@ -68,6 +77,9 @@ interface LessonStep {
   title: string;
   type: 'concept' | 'exercise' | 'visualization';
   content: StepContent;
+  /** Backend schema places quiz at step level (not step.content) */
+  quiz?: Quiz;
+  exercise?: Exercise;
 }
 
 interface Lesson {
@@ -88,7 +100,8 @@ interface LessonRendererProps {
 const QuizBlock: React.FC<{
   quiz: Quiz;
   onAnswer: (isCorrect: boolean) => void;
-}> = ({ quiz, onAnswer }) => {
+  onWrongAnswer?: (question: string, wrongAnswer: string, correctAnswer: string) => void;
+}> = ({ quiz, onAnswer, onWrongAnswer }) => {
   const [selected, setSelected] = useState<string | null>(null);
   const [answered, setAnswered] = useState(false);
   const [isCorrect, setIsCorrect] = useState(false);
@@ -97,9 +110,19 @@ const QuizBlock: React.FC<{
     if (selected === null) return;
     const option = quiz.options.find((o) => o.id === selected);
     if (option) {
-      setIsCorrect(option.correct);
+      const correct = option.correct;
+      setIsCorrect(correct);
       setAnswered(true);
-      onAnswer(option.correct);
+      onAnswer(correct);
+
+      if (!correct && onWrongAnswer) {
+        const correctOption = quiz.options.find((o) => o.correct);
+        onWrongAnswer(
+          quiz.question,
+          option.text,
+          correctOption?.text ?? '(see explanation)',
+        );
+      }
     }
   };
 
@@ -230,12 +253,21 @@ export const LessonRenderer: React.FC<LessonRendererProps> = ({
   lessonData,
   onLessonSave,
 }) => {
-  const { user, logout, isAuthenticated } = useAuth();
+  const { isAuthenticated, user, logout, api } = useAuth();
   const [activeStep, setActiveStep] = useState(0);
   const [scores, setScores] = useState<Record<string, any>>({});
   const [saving, setSaving] = useState(false);
   const [saveDialog, setSaveDialog] = useState(false);
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Misconception modal state
+  const [misconception, setMisconception] = useState<{
+    open: boolean;
+    question: string;
+    wrongAnswer: string;
+    correctAnswer: string;
+  }>({ open: false, question: '', wrongAnswer: '', correctAnswer: '' });
 
   const handleNext = () => {
     if (activeStep < lessonData.steps.length - 1) {
@@ -249,40 +281,71 @@ export const LessonRenderer: React.FC<LessonRendererProps> = ({
     }
   };
 
+  // Auto-enqueue lesson for spaced repetition when the user completes the final step
+  const handleLessonComplete = useCallback(async () => {
+    if (!isAuthenticated || !lessonData.id) return;
+    try {
+      await api.post(`/api/lessons/${lessonData.id}/enqueue`);
+    } catch {
+      // Non-fatal — user already finished the lesson
+    }
+  }, [api, isAuthenticated, lessonData.id]);
+
+  // Triggered when user navigates past the last step
+  useEffect(() => {
+    const isOnLastStep = activeStep === lessonData.steps.length - 1;
+    const allScored = lessonData.steps.every((s) => scores[s.id] !== undefined);
+    if (isOnLastStep && allScored) {
+      handleLessonComplete();
+    }
+  }, [activeStep, scores]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleSaveProgress = async () => {
     if (!isAuthenticated || !lessonData.id) return;
-
     setSaving(true);
+    setSaveError(null);
     try {
       const completionPercentage = Math.round(
         ((activeStep + 1) / lessonData.steps.length) * 100
       );
-
-      // This would normally call the API
-      console.log('Saving progress:', {
-        lesson_id: lessonData.id,
+      await api.post(`/api/progress/${lessonData.id}`, {
         current_step: activeStep,
         completion_percentage: completionPercentage,
         quiz_scores: scores,
+        is_completed: completionPercentage === 100,
       });
-
       setSaveDialog(true);
+      if (completionPercentage === 100) {
+        await handleLessonComplete();
+        onLessonSave?.(lessonData.id);
+      }
+    } catch (e: any) {
+      setSaveError(e.response?.data?.detail ?? 'Failed to save progress');
     } finally {
       setSaving(false);
     }
   };
 
   const handleQuizAnswer = (stepId: string, isCorrect: boolean) => {
-    setScores({
-      ...scores,
-      [stepId]: isCorrect,
-    });
+    setScores({ ...scores, [stepId]: isCorrect });
+  };
+
+  const handleWrongAnswer = (question: string, wrongAnswer: string, correctAnswer: string) => {
+    setMisconception({ open: true, question, wrongAnswer, correctAnswer });
   };
 
   const currentStep = lessonData.steps[activeStep];
   const completionPercentage = Math.round(
     ((activeStep + 1) / lessonData.steps.length) * 100
   );
+
+  // Resolve quiz/exercise from either step-level or content-level (supports both schemas)
+  const activeQuiz     = currentStep?.quiz     ?? currentStep?.content?.quiz;
+  const activeExercise = currentStep?.exercise ?? currentStep?.content?.exercise;
+
+  // Resolve code snippet — prefer codeHighlight (has language), fall back to codeSnippet
+  const codeHighlight = currentStep?.content?.codeHighlight;
+  const codeSnippet   = currentStep?.content?.codeSnippet;
 
   return (
     <Box className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
@@ -421,13 +484,15 @@ export const LessonRenderer: React.FC<LessonRendererProps> = ({
                 </Typography>
               )}
 
-              {currentStep.content.codeSnippet && (
-                <Paper
-                  className="bg-slate-900 text-slate-100 p-4 mb-6 rounded font-mono text-sm overflow-x-auto"
-                  elevation={0}
-                >
-                  {currentStep.content.codeSnippet}
-                </Paper>
+              {/* Code block — interactive runner (Pyodide for Python, iframe for JS) */}
+              {(codeHighlight || codeSnippet) && (
+                <Box sx={{ mb: 3 }}>
+                  <CodeRunner
+                    code={codeHighlight?.snippet ?? codeSnippet ?? ''}
+                    language={codeHighlight?.language ?? 'javascript'}
+                    showLineNumbers
+                  />
+                </Box>
               )}
 
               {currentStep.content.keyTakeaway && (
@@ -436,20 +501,19 @@ export const LessonRenderer: React.FC<LessonRendererProps> = ({
                 </Alert>
               )}
 
-              {/* Quiz */}
-              {currentStep.content.quiz && (
+              {/* Quiz — supports both step.quiz and step.content.quiz */}
+              {activeQuiz && (
                 <QuizBlock
-                  quiz={currentStep.content.quiz}
-                  onAnswer={(isCorrect) =>
-                    handleQuizAnswer(currentStep.id, isCorrect)
-                  }
+                  quiz={activeQuiz}
+                  onAnswer={(isCorrect) => handleQuizAnswer(currentStep.id, isCorrect)}
+                  onWrongAnswer={handleWrongAnswer}
                 />
               )}
 
-              {/* Exercise */}
-              {currentStep.content.exercise && (
+              {/* Exercise — supports both step.exercise and step.content.exercise */}
+              {activeExercise && (
                 <FillInTheBlanksExercise
-                  exercise={currentStep.content.exercise}
+                  exercise={activeExercise}
                   onComplete={(exerciseScores) =>
                     handleQuizAnswer(currentStep.id, Object.values(exerciseScores).every(Boolean))
                   }
@@ -492,16 +556,37 @@ export const LessonRenderer: React.FC<LessonRendererProps> = ({
 
         {/* Save Dialog */}
         <Dialog open={saveDialog} onClose={() => setSaveDialog(false)}>
-          <DialogTitle>Progress Saved</DialogTitle>
+          <DialogTitle>Progress Saved ✅</DialogTitle>
           <DialogContent>
             <Typography>
               Your progress has been saved! You can resume this lesson anytime from your library.
+              {completionPercentage === 100 && (
+                <> This lesson has been added to your <strong>Daily Review</strong> queue — you'll see it again in 24 hours.</>
+              )}
             </Typography>
           </DialogContent>
           <DialogActions>
             <Button onClick={() => setSaveDialog(false)}>Close</Button>
           </DialogActions>
         </Dialog>
+
+        {/* Misconception micro-lesson modal */}
+        <MisconceptionModal
+          open={misconception.open}
+          question={misconception.question}
+          wrongAnswer={misconception.wrongAnswer}
+          correctAnswer={misconception.correctAnswer}
+          lessonContext={lessonData.description}
+          onClose={() => setMisconception((m) => ({ ...m, open: false }))}
+        />
+
+        {/* Save error snackbar */}
+        <Snackbar
+          open={!!saveError}
+          autoHideDuration={4000}
+          onClose={() => setSaveError(null)}
+          message={saveError}
+        />
       </Box>
     </Box>
   );
