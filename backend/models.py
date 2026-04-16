@@ -28,6 +28,11 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     depth_level = Column(String(20), default='beginner', nullable=False)  # eli5/beginner/intermediate/expert
 
+    subscription_tier = Column(String(20), default='free', nullable=False)
+    stripe_customer_id = Column(String(100), nullable=True)
+    lesson_count_this_month = Column(Integer, default=0)
+    lesson_count_reset_at = Column(DateTime(timezone=True), nullable=True)
+
     # Relationships
     lessons = relationship("Lesson", back_populates="user", cascade="all, delete-orphan")
     progress = relationship("UserProgress", back_populates="user", cascade="all, delete-orphan")
@@ -63,6 +68,12 @@ class Lesson(Base):
     validation_notes = Column(Text, nullable=True)
     validation_confidence = Column(DECIMAL(3, 2), nullable=True)
     concepts_json = Column(JSON, nullable=True)                  # {primary_concepts, prerequisites}
+
+    # Phase 6: community features
+    fork_count = Column(Integer, default=0)
+    upvote_count = Column(Integer, default=0)
+    tags_json = Column(JSON, nullable=True)
+    forked_from_id = Column(UUID(as_uuid=True), ForeignKey("lessons.id", ondelete="SET NULL"), nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="lessons")
@@ -250,3 +261,22 @@ class EngagementEvent(Base):
 
     def __repr__(self):
         return f"<EngagementEvent {self.event_type} user={self.user_id}>"
+
+
+# ===== PHASE 6 MODELS =====
+
+class LessonUpvote(Base):
+    __tablename__ = "lesson_upvotes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    lesson_id = Column(UUID(as_uuid=True), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('lesson_id', 'user_id', name='uq_lesson_upvote'),
+        Index('idx_upvotes_lesson', 'lesson_id'),
+    )
+
+    def __repr__(self):
+        return f"<LessonUpvote lesson={self.lesson_id} user={self.user_id}>"

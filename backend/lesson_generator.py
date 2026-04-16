@@ -309,3 +309,117 @@ Respond with ONLY valid JSON — no markdown, no wrapper:
             ),
         )
         return self._parse_json(response.text)
+
+    def generate_lesson_from_github(self, file_url: str, file_content: str) -> LessonWrapper:
+        """
+        Analyze a real GitHub file and generate a "Reading Code" lesson with 3 steps:
+          1. Author's intent (module-level purpose)
+          2. Design patterns present
+          3. Implicit preconditions / caller contracts
+        """
+        system_prompt = """You are the VibeCode Teacher Engine. Your job is to analyze real-world
+open-source code and generate a "Reading Code" lesson that teaches a developer how to read,
+understand, and reason about code they did not write.
+
+The lesson MUST have exactly 3 steps:
+1. **What is the author's intent?** — Explain the module-level purpose in plain English.
+   Include a quiz with 4 options where only 1 is correct.
+2. **What design patterns are present?** — Identify 1-2 patterns (factory, singleton,
+   strategy, observer, decorator, etc.) and explain how they appear in this code.
+   Include a fill-in-the-blank exercise with 4 blanks, each with 3-4 options.
+3. **What does this code assume about its caller?** — Identify preconditions, implicit
+   contracts, expected input types, and failure modes.
+   Include a 5-stage data journey showing how a realistic call flows through the code.
+
+CRITICAL REQUIREMENTS:
+- Make the lesson RELATABLE: Use real-world metaphors and scenarios
+- Include EMOJI in step titles (🔍, 🏗️, 📜, etc.)
+- Each quiz option MUST include a detailed explanation
+- Each blank exercise MUST have clear hints
+- The data journey MUST show actual code snippets and data transformations at each stage
+- Timelines MUST include realistic durations
+- All steps MUST build on each other logically
+- Use the exact field names from the Lesson schema (no typos!)
+
+Return ONLY a valid JSON object matching the Lesson schema. No markdown, no explanations, just JSON."""
+
+        user_prompt = f"""Generate a "Reading Code" lesson for this file:
+
+FILE URL: {file_url}
+
+FILE CONTENT:
+```
+{file_content}
+```
+
+Analyze the 3 most interesting/complex functions or classes. Focus on readability,
+design intent, and caller contracts. Follow the 3-step structure exactly."""
+
+        try:
+            response = self.model.generate_content(
+                [{"role": "user", "parts": [{"text": system_prompt + "\n\n" + user_prompt}]}],
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.7,
+                    max_output_tokens=8000,
+                ),
+            )
+            response_text = response.text.strip()
+            try:
+                lesson_dict = json.loads(response_text)
+            except json.JSONDecodeError:
+                lesson_dict = self._parse_json(response_text)
+                if "lesson" not in lesson_dict:
+                    lesson_dict = {"lesson": lesson_dict}
+            else:
+                if "lesson" not in lesson_dict:
+                    lesson_dict = {"lesson": lesson_dict}
+            return LessonWrapper(**lesson_dict)
+        except Exception as e:
+            raise ValueError(f"Failed to generate GitHub lesson: {str(e)}")
+
+    def analyze_job_gap(self, user_concepts: list, target_role: str) -> dict:
+        """
+        Given a list of programming concepts the user knows and a target job role,
+        produce a gap analysis report.
+
+        Returns a dict with:
+            coverage_percent    — int 0-100
+            known_concepts      — subset of user_concepts relevant to the role
+            gap_concepts        — list[{name, importance, description, estimated_hours}]
+            summary             — 2-sentence assessment
+            top_resources       — list[{concept, action}]
+        """
+        concepts_str = ", ".join(user_concepts) if user_concepts else "(none yet)"
+        prompt = f"""You are a senior engineering hiring consultant. A developer wants to become
+a "{target_role}". Analyze the gap between what they know and what the role requires.
+
+CONCEPTS THE USER KNOWS: {concepts_str}
+
+Produce a JSON gap analysis. Respond with ONLY valid JSON — no markdown, no wrapper:
+{{
+  "coverage_percent": <int 0-100>,
+  "known_concepts": ["<concepts from user list relevant to the role>"],
+  "gap_concepts": [
+    {{
+      "name": "<concept name>",
+      "importance": "critical|important|nice-to-have",
+      "description": "<one sentence: why this matters for the role>",
+      "estimated_hours": <int hours to learn>
+    }}
+  ],
+  "summary": "<2 sentences: overall assessment of the developer's readiness>",
+  "top_resources": [
+    {{
+      "concept": "<gap concept name>",
+      "action": "<e.g. 'Generate a VibeCode lesson on X' or 'Read MDN docs on Y'>"
+    }}
+  ]
+}}
+
+Limit gap_concepts to the 8 most impactful. Limit top_resources to 5."""
+
+        response = self.model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(temperature=0.3, max_output_tokens=1024),
+        )
+        return self._parse_json(response.text)

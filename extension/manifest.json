@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "VibeCode Teacher",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "description": "Turn any AI-generated code into an interactive lesson. Works on ChatGPT, Claude, Gemini, GitHub, Stack Overflow, and more.",
   "permissions": ["activeTab", "scripting", "storage"],
   "action": {
     "default_popup": "popup.html"
@@ -10,8 +11,19 @@
     {
       "matches": [
         "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
         "https://claude.ai/*",
-        "https://gemini.google.com/*"
+        "https://gemini.google.com/*",
+        "https://github.com/*",
+        "https://stackoverflow.com/*",
+        "https://stackexchange.com/*",
+        "https://cursor.sh/*",
+        "https://*.cursor.sh/*",
+        "https://v0.dev/*",
+        "https://bolt.new/*",
+        "https://replit.com/*",
+        "https://codesandbox.io/*",
+        "https://codepen.io/*"
       ],
       "js": ["content.js"]
     }

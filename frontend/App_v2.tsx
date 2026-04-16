@@ -8,6 +8,10 @@ import { DailyReview } from './DailyReview';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import { DepthSlider, DepthLevel } from './DepthSlider';
 import { BookOpen, LogOut } from 'lucide-react';
+import { PricingModal } from './PricingModal';
+import { CommunityLibrary } from './CommunityLibrary';
+import { GitHubReader } from './GitHubReader';
+import { JobGapAnalysis } from './JobGapAnalysis';
 
 // Sample lesson for demonstration
 const SAMPLE_LESSON = {
@@ -177,12 +181,12 @@ useEffect(() => {
 };
 
 interface AppProps {
-  initialView?: 'library' | 'lesson' | 'home' | 'review' | 'analytics';
+  initialView?: 'library' | 'lesson' | 'home' | 'review' | 'analytics' | 'community' | 'github' | 'job-gap';
 }
 
 const AppContent: React.FC<AppProps> = ({ initialView = 'home' }) => {
   const { isAuthenticated, user, logout, api } = useAuth();
-  const [currentView, setCurrentView] = useState<'library' | 'lesson' | 'home' | 'review' | 'analytics'>(
+  const [currentView, setCurrentView] = useState<'library' | 'lesson' | 'home' | 'review' | 'analytics' | 'community' | 'github' | 'job-gap'>(
     initialView
   );
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -190,6 +194,7 @@ const AppContent: React.FC<AppProps> = ({ initialView = 'home' }) => {
   const [dueCount, setDueCount] = useState(0);
   const [depthLevel, setDepthLevel] = useState<DepthLevel>('beginner');
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
+  const [pricingOpen, setPricingOpen] = useState(false);
 
   // Fetch review due count + user depth on auth
   useEffect(() => {
@@ -247,6 +252,27 @@ const AppContent: React.FC<AppProps> = ({ initialView = 'home' }) => {
                 >
                   📊 Analytics
                 </Button>
+                <Button
+                  variant={currentView === 'community' ? 'contained' : 'text'}
+                  onClick={() => setCurrentView('community')}
+                  size="small"
+                >
+                  🌍 Community
+                </Button>
+                <Button
+                  variant={currentView === 'github' ? 'contained' : 'text'}
+                  onClick={() => setCurrentView('github')}
+                  size="small"
+                >
+                  🐙 GitHub
+                </Button>
+                <Button
+                  variant={currentView === 'job-gap' ? 'contained' : 'text'}
+                  onClick={() => setCurrentView('job-gap')}
+                  size="small"
+                >
+                  💼 Job Gap
+                </Button>
                 <Typography variant="body2" className="text-slate-600">
                   {user?.username}
                 </Typography>
@@ -272,6 +298,12 @@ const AppContent: React.FC<AppProps> = ({ initialView = 'home' }) => {
                     onDepthChange={(d) => { setDepthLevel(d); setUserMenuAnchor(null); }}
                   />
                   <Box sx={{ mt: 2, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
+                    <MenuItem
+                      onClick={() => { setPricingOpen(true); setUserMenuAnchor(null); }}
+                      sx={{ borderRadius: 1 }}
+                    >
+                      ✨ Upgrade to Pro
+                    </MenuItem>
                     <MenuItem
                       onClick={() => { logout(); setUserMenuAnchor(null); }}
                       sx={{ color: 'error.main', borderRadius: 1 }}
@@ -367,8 +399,27 @@ const AppContent: React.FC<AppProps> = ({ initialView = 'home' }) => {
         <LessonRenderer lessonData={SAMPLE_LESSON} />
       )}
 
+      {currentView === 'community' && isAuthenticated && (
+        <CommunityLibrary onOpenLesson={handleSelectLesson} />
+      )}
+
+      {currentView === 'github' && isAuthenticated && (
+        <GitHubReader onLessonGenerated={(lesson) => {
+          setCurrentView('lesson');
+        }} />
+      )}
+
+      {currentView === 'job-gap' && isAuthenticated && (
+        <JobGapAnalysis onGenerateLesson={(concept) => {
+          setCurrentView('lesson');
+        }} />
+      )}
+
       {/* Auth Modal */}
       <AuthModal open={authModalOpen} onOpenChange={setAuthModalOpen} />
+
+      {/* Pricing Modal */}
+      <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
     </Box>
   );
 };

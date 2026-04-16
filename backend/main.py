@@ -1,10 +1,11 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthCredential
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 import uvicorn
 import logging
+import os
 from datetime import timedelta, datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -12,7 +13,7 @@ from sqlalchemy import func
 from lesson_generator import LessonGenerator
 from schemas import Lesson
 from database import get_db, init_db, check_db_health
-from models import User, Lesson as LessonModel, UserProgress, LessonRating, RefreshToken, ReviewCard, ReviewLog, EngagementEvent
+from models import User, Lesson as LessonModel, UserProgress, LessonRating, RefreshToken, ReviewCard, ReviewLog, EngagementEvent, LessonUpvote
 from auth import (
     hash_password, verify_password, 
     create_token_pair, decode_access_token, decode_refresh_token,
@@ -295,7 +296,30 @@ async def get_current_user(
     return user
 
 
-# ===== LESSON ENDPOINTS =====
+# ===== FREE TIER GATING =====
+
+FREE_TIER_MONTHLY_LIMIT = 10
+
+
+async def require_pro(current_user: User = Depends(get_current_user)):
+    if current_user.subscription_tier == 'free':
+        raise HTTPException(status_code=402, detail="Pro subscription required. Upgrade at /pricing")
+    return current_user
+
+
+async def check_and_increment_lesson_count(user: User, db: Session):
+    """Increment monthly lesson count; raises 402 if free user hit their limit."""
+    now = datetime.utcnow()
+    if user.lesson_count_reset_at is None or user.lesson_count_reset_at.month != now.month:
+        user.lesson_count_this_month = 0
+        user.lesson_count_reset_at = now
+    if user.subscription_tier == 'free' and user.lesson_count_this_month >= FREE_TIER_MONTHLY_LIMIT:
+        raise HTTPException(
+            status_code=402,
+            detail=f"Free tier limit reached ({FREE_TIER_MONTHLY_LIMIT} lessons/month). Upgrade to Pro for unlimited lessons."
+        )
+    user.lesson_count_this_month += 1
+    db.add(user)
 
 @app.post("/ingest")
 async def ingest_conversation(data: CodeIngestion):
@@ -370,6 +394,7 @@ async def generate_and_save_lesson(
     
     try:
         logger.info(f"🔄 Generating lesson for user: {current_user.email}")
+        await check_and_increment_lesson_count(current_user, db)
         
         # Generate lesson — pass user's depth level for personalised explanations
         lesson_data = lesson_generator.generate_lesson_structured(
@@ -1112,3 +1137,276 @@ if __name__ == "__main__":
         logger.warning(f"⚠️ Could not initialize database: {e}")
     
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+# ===== PHASE 6: COMMUNITY LESSONS =====
+
+@app.get("/api/community")
+async def get_community_lessons(
+    search: Optional[str] = None,
+    tag: Optional[str] = None,
+    sort: str = "upvotes",  # upvotes | recent | forks
+    page: int = 1,
+    db: Session = Depends(get_db)
+):
+    """Public lesson library. No auth required."""
+    query = db.query(LessonModel).filter(LessonModel.is_public == True)
+    if search:
+        query = query.filter(LessonModel.title.ilike(f"%{search}%"))
+    if tag:
+        query = query.filter(LessonModel.tags_json.contains([tag]))
+    if sort == "upvotes":
+        query = query.order_by(LessonModel.upvote_count.desc())
+    elif sort == "recent":
+        query = query.order_by(LessonModel.created_at.desc())
+    elif sort == "forks":
+        query = query.order_by(LessonModel.fork_count.desc())
+    lessons = query.offset((page - 1) * 20).limit(20).all()
+    return {
+        "lessons": [
+            {
+                "id": str(l.id), "title": l.title, "description": l.description,
+                "difficulty": l.difficulty, "upvote_count": l.upvote_count,
+                "fork_count": l.fork_count, "tags": l.tags_json or [],
+                "created_at": l.created_at.isoformat(), "validation_status": l.validation_status,
+            }
+            for l in lessons
+        ],
+        "page": page,
+    }
+
+
+@app.post("/api/lessons/{lesson_id}/publish")
+async def publish_lesson(
+    lesson_id: str,
+    tags: Optional[list] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    lesson = db.query(LessonModel).filter(
+        LessonModel.id == lesson_id, LessonModel.user_id == current_user.id
+    ).first()
+    if not lesson:
+        raise HTTPException(404, "Lesson not found")
+    lesson.is_public = True
+    if tags:
+        lesson.tags_json = tags
+    db.commit()
+    return {"status": "published", "lesson_id": lesson_id}
+
+
+@app.post("/api/lessons/{lesson_id}/upvote")
+async def upvote_lesson(
+    lesson_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    existing = db.query(LessonUpvote).filter(
+        LessonUpvote.lesson_id == lesson_id, LessonUpvote.user_id == current_user.id
+    ).first()
+    if existing:
+        db.delete(existing)
+        db.query(LessonModel).filter(LessonModel.id == lesson_id).update(
+            {"upvote_count": LessonModel.upvote_count - 1}
+        )
+        db.commit()
+        return {"status": "removed"}
+    upvote = LessonUpvote(lesson_id=lesson_id, user_id=current_user.id)
+    db.add(upvote)
+    db.query(LessonModel).filter(LessonModel.id == lesson_id).update(
+        {"upvote_count": LessonModel.upvote_count + 1}
+    )
+    db.commit()
+    return {"status": "upvoted"}
+
+
+@app.post("/api/lessons/{lesson_id}/fork")
+async def fork_lesson(
+    lesson_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    source = db.query(LessonModel).filter(
+        LessonModel.id == lesson_id, LessonModel.is_public == True
+    ).first()
+    if not source:
+        raise HTTPException(404, "Lesson not found or not public")
+    forked = LessonModel(
+        user_id=current_user.id,
+        title=f"{source.title} (fork)",
+        description=source.description,
+        difficulty=source.difficulty,
+        lesson_json=source.lesson_json,
+        source_url=source.source_url,
+        is_public=False,
+        forked_from_id=source.id,
+        tags_json=source.tags_json,
+    )
+    db.add(forked)
+    db.query(LessonModel).filter(LessonModel.id == lesson_id).update(
+        {"fork_count": LessonModel.fork_count + 1}
+    )
+    db.commit()
+    db.refresh(forked)
+    return {"status": "forked", "new_lesson_id": str(forked.id)}
+
+
+# ===== PHASE 6: GITHUB READER =====
+
+class GitHubLessonRequest(BaseModel):
+    github_url: str   # e.g. https://github.com/owner/repo/blob/main/path/to/file.py
+    difficulty: Optional[str] = "beginner"
+
+
+@app.post("/api/lessons/from-github")
+async def generate_lesson_from_github(
+    request: GitHubLessonRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not lesson_generator:
+        raise HTTPException(503, "Lesson generator not available")
+    await check_and_increment_lesson_count(current_user, db)
+
+    # Convert github.com URL to raw content URL
+    raw_url = request.github_url
+    raw_url = raw_url.replace("https://github.com/", "https://raw.githubusercontent.com/")
+    raw_url = raw_url.replace("/blob/", "/")
+
+    import httpx
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(raw_url)
+        if resp.status_code != 200:
+            raise HTTPException(400, f"Could not fetch file: HTTP {resp.status_code}")
+        file_content = resp.text[:8000]  # cap at 8k chars
+
+    try:
+        wrapper = lesson_generator.generate_lesson_from_github(raw_url, file_content)
+        lesson_data = wrapper.model_dump()
+        lesson_dict = lesson_data.get('lesson', lesson_data)
+
+        lesson = LessonModel(
+            user_id=current_user.id,
+            title=lesson_dict.get('title', 'GitHub Lesson'),
+            description=lesson_dict.get('description', ''),
+            difficulty=request.difficulty,
+            lesson_json=lesson_dict,
+            source_url=request.github_url,
+        )
+        db.add(lesson)
+        db.commit()
+        db.refresh(lesson)
+        return {"status": "success", "lesson_id": str(lesson.id), "lesson": lesson_dict}
+    except Exception as e:
+        raise HTTPException(500, f"Generation failed: {str(e)}")
+
+
+# ===== PHASE 6: JOB GAP ANALYSIS =====
+
+@app.get("/api/job-gap")
+async def get_job_gap_analysis(
+    role: str = "junior-react-developer",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not lesson_generator:
+        raise HTTPException(503, "Lesson generator not available")
+
+    user_lessons = db.query(LessonModel).filter(LessonModel.user_id == current_user.id).all()
+    user_concepts = []
+    for lesson in user_lessons:
+        concepts = lesson.concepts_json or {}
+        user_concepts.extend(concepts.get('primary_concepts', []))
+    user_concepts = list(set(user_concepts))
+
+    result = lesson_generator.analyze_job_gap(user_concepts, role)
+    return {
+        "role": role,
+        "user_concept_count": len(user_concepts),
+        **result,
+    }
+
+
+# ===== PHASE 6: STRIPE BILLING =====
+
+class CheckoutRequest(BaseModel):
+    plan: str  # "pro" or "team"
+    success_url: str = "http://localhost:3000/billing/success"
+    cancel_url: str = "http://localhost:3000/billing/cancel"
+
+
+@app.post("/api/billing/create-checkout")
+async def create_checkout_session(
+    request: CheckoutRequest,
+    current_user: User = Depends(get_current_user),
+):
+    import stripe
+    stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+    if not stripe.api_key:
+        raise HTTPException(503, "Stripe not configured. Set STRIPE_SECRET_KEY env var.")
+
+    PRICE_IDS = {
+        "pro":  os.getenv("STRIPE_PRO_PRICE_ID", "price_pro_placeholder"),
+        "team": os.getenv("STRIPE_TEAM_PRICE_ID", "price_team_placeholder"),
+    }
+    price_id = PRICE_IDS.get(request.plan)
+    if not price_id:
+        raise HTTPException(400, f"Unknown plan: {request.plan}")
+
+    session = stripe.checkout.Session.create(
+        customer_email=current_user.email,
+        payment_method_types=["card"],
+        line_items=[{"price": price_id, "quantity": 1}],
+        mode="subscription",
+        success_url=request.success_url + "?session_id={CHECKOUT_SESSION_ID}",
+        cancel_url=request.cancel_url,
+        metadata={"user_id": str(current_user.id)},
+    )
+    return {"checkout_url": session.url}
+
+
+@app.post("/api/billing/webhook")
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    """Stripe sends events here. Must be registered in Stripe Dashboard."""
+    import stripe
+    stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except Exception as e:
+        raise HTTPException(400, f"Webhook error: {str(e)}")
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        user_id = session.get("metadata", {}).get("user_id")
+        if user_id:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user:
+                user.subscription_tier = "pro"
+                user.stripe_customer_id = session.get("customer")
+                db.commit()
+
+    elif event["type"] in ("customer.subscription.deleted", "customer.subscription.paused"):
+        customer_id = event["data"]["object"].get("customer")
+        if customer_id:
+            user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
+            if user:
+                user.subscription_tier = "free"
+                db.commit()
+
+    return {"received": True}
+
+
+@app.get("/api/billing/status")
+async def get_billing_status(current_user: User = Depends(get_current_user)):
+    return {
+        "subscription_tier": current_user.subscription_tier,
+        "lesson_count_this_month": current_user.lesson_count_this_month,
+        "free_limit": FREE_TIER_MONTHLY_LIMIT,
+        "lessons_remaining": max(0, FREE_TIER_MONTHLY_LIMIT - current_user.lesson_count_this_month) if current_user.subscription_tier == 'free' else None,
+        "stripe_customer_id": current_user.stripe_customer_id,
+    }
