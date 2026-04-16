@@ -1,4 +1,12 @@
-const BACKEND_URL = "http://localhost:8000";
+const DEFAULT_BACKEND_URL = "https://vibecode-backend.onrender.com";
+let BACKEND_URL = DEFAULT_BACKEND_URL;
+
+// Load saved backend URL on startup
+chrome.storage.local.get(['vibecode_backend_url'], (r) => {
+  BACKEND_URL = r.vibecode_backend_url || DEFAULT_BACKEND_URL;
+  const input = document.getElementById("backendUrlInput");
+  if (input) input.value = BACKEND_URL;
+});
 
 const grabBtn    = document.getElementById("grabBtn");
 const sendBtn    = document.getElementById("sendBtn");
@@ -125,5 +133,19 @@ lessonBtn.addEventListener("click", async () => {
   } catch (error) {
     updateStatus(`❌ ${error.message}`, "error");
   }
+});
+
+// ─── Save backend URL setting ─────────────────────────────────────────────────
+document.getElementById("saveUrlBtn").addEventListener("click", () => {
+  const input = document.getElementById("backendUrlInput");
+  const url = input.value.trim().replace(/\/$/, "");
+  if (!url.startsWith("http")) {
+    updateStatus("❌ URL must start with http:// or https://", "error");
+    return;
+  }
+  BACKEND_URL = url;
+  chrome.storage.local.set({ vibecode_backend_url: url }, () => {
+    updateStatus(`✅ Backend URL saved: ${url}`, "success");
+  });
 });
 
