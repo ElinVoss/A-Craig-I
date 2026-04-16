@@ -1,0 +1,304 @@
+{
+  "lesson": {
+    "title": "VibeCode: Browser-to-Backend Communication",
+    "description": "Learn how data flows from a Chrome extension to a FastAPI backend",
+    "difficulty": "beginner",
+    "estimatedTime": "15 minutes",
+    "learningObjectives": [
+      "Understand why CORS middleware is necessary for browser-backend communication",
+      "Learn Pydantic data models and validation",
+      "Visualize the complete request/response cycle"
+    ],
+    "steps": [
+      {
+        "id": "step_1",
+        "title": "🔗 The Hook: Why CORS Exists",
+        "order": 1,
+        "type": "concept",
+        "content": {
+          "headline": "Your browser has a bodyguard.",
+          "explanation": "By default, web browsers enforce a **Same-Origin Policy**. This means a webpage from `claude.ai` cannot make requests to `localhost:8000` without permission. It's a security feature to prevent malicious scripts from stealing your data.",
+          "scenario": "Imagine this: You're on Claude.ai asking for code. The page tries to send that code to your local Python backend. Your browser blocks it—not because of a bug, but because a malicious website could do the same thing to steal your banking info.",
+          "solution": "Enter **CORS (Cross-Origin Resource Sharing)**. This is a protocol that says: 'It's okay, I give permission.' When your FastAPI backend includes CORS middleware, it tells the browser: 'I'm safe, you can talk to me.'",
+          "codeHighlight": {
+            "language": "python",
+            "snippet": "app.add_middleware(\n    CORSMiddleware,\n    allow_origins=[\"*\"],  # Allow all origins (for development)\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)"
+          },
+          "keyTakeaway": "Without this middleware, your Chrome extension's `fetch()` call would fail silently. The browser would say: 'No, I don't know if that backend is trustworthy.'"
+        },
+        "quiz": {
+          "question": "Why can't your Chrome extension talk to `localhost:8000` without CORS middleware?",
+          "options": [
+            {
+              "id": "a",
+              "text": "The firewall is blocking it.",
+              "correct": false,
+              "explanation": "Firewalls operate at the network layer. CORS is a browser-level security feature."
+            },
+            {
+              "id": "b",
+              "text": "The browser's Same-Origin Policy blocks cross-origin requests.",
+              "correct": true,
+              "explanation": "Correct! The browser sees `claude.ai` (origin) trying to talk to `localhost:8000` (different origin) and blocks it for security."
+            },
+            {
+              "id": "c",
+              "text": "FastAPI doesn't support HTTP requests.",
+              "correct": false,
+              "explanation": "FastAPI absolutely supports HTTP. The issue is the browser policy, not the backend."
+            },
+            {
+              "id": "d",
+              "text": "You need to use WebSockets instead.",
+              "correct": false,
+              "explanation": "WebSockets still require CORS headers. This is a browser security requirement, not a protocol issue."
+            }
+          ]
+        }
+      },
+      {
+        "id": "step_2",
+        "title": "🧩 The Logic: Pydantic Models & Data Validation",
+        "order": 2,
+        "type": "exercise",
+        "content": {
+          "headline": "Every message needs a shape.",
+          "explanation": "When your extension sends data to the backend, both sides need to agree: 'What data are we sending? What are the types?' That's where **Pydantic models** come in. They're like blueprints that say: 'I expect a string for code, a string for context,' etc.",
+          "modelBreakdown": {
+            "name": "CodeIngestion",
+            "description": "This model defines the structure of code that flows from your browser to the backend.",
+            "fields": [
+              {
+                "name": "code",
+                "type": "str",
+                "required": true,
+                "description": "The raw source code extracted from the AI chat",
+                "example": "def hello():\\n    print('Hello, world!')"
+              },
+              {
+                "name": "context",
+                "type": "str",
+                "required": true,
+                "description": "The prompt or conversation context that preceded the code",
+                "example": "Write a simple Python hello world function"
+              },
+              {
+                "name": "url",
+                "type": "str",
+                "required": true,
+                "description": "The URL of the AI chat page (e.g., claude.ai, chatgpt.com)",
+                "example": "https://claude.ai/chat/abc123"
+              },
+              {
+                "name": "source_model",
+                "type": "Optional[str]",
+                "required": false,
+                "default": "Unknown",
+                "description": "The AI model that generated the code (Claude, GPT-4, etc.)",
+                "example": "claude-3-opus"
+              }
+            ]
+          },
+          "codeHighlight": {
+            "language": "python",
+            "snippet": "class CodeIngestion(BaseModel):\n    code: str\n    context: str\n    url: str\n    source_model: Optional[str] = \"Unknown\""
+          }
+        },
+        "exercise": {
+          "type": "fillInTheBlank",
+          "title": "Build the CodeIngestion Model",
+          "description": "Fill in the missing field definitions in the Pydantic model. The code on the left shows what's sent from the browser.",
+          "given": {
+            "code": "class CodeIngestion(BaseModel):\n    code: ___________\n    ___________: str\n    url: ___________\n    source_model: Optional[___________] = \"Unknown\"",
+            "language": "python"
+          },
+          "blanks": [
+            {
+              "id": "blank_1",
+              "position": "line 2, after 'code:'",
+              "answer": "str",
+              "hint": "What data type is code? It's text, so it's a Python...",
+              "options": ["str", "int", "bytes", "list"]
+            },
+            {
+              "id": "blank_2",
+              "position": "line 3, before ': str'",
+              "answer": "context",
+              "hint": "This field holds the conversation text preceding the code.",
+              "options": ["context", "prompt", "conversation", "text"]
+            },
+            {
+              "id": "blank_3",
+              "position": "line 4, after 'url:'",
+              "answer": "str",
+              "hint": "URLs are text strings. What type?",
+              "options": ["str", "URL", "HttpUrl", "link"]
+            },
+            {
+              "id": "blank_4",
+              "position": "line 5, after 'Optional['",
+              "answer": "str",
+              "hint": "The model name (Claude, GPT, etc.) is text, so it's a...",
+              "options": ["str", "model", "name", "string"]
+            }
+          ]
+        },
+        "whyMatters": [
+          "Pydantic **validates** incoming data. If the browser sends malformed data, FastAPI rejects it automatically.",
+          "**Type hints** make your code self-documenting. Any developer can look at this model and understand what data flows through.",
+          "**Optional fields** let you make some data required and some optional. Here, `source_model` is optional—the backend will use 'Unknown' as a default if not provided."
+        ]
+      },
+      {
+        "id": "step_3",
+        "title": "🌊 The Flow: Data Journey Visualization",
+        "order": 3,
+        "type": "visualization",
+        "content": {
+          "headline": "Follow the data from browser to backend.",
+          "dataJourney": [
+            {
+              "stage": 0,
+              "location": "🌐 User's Browser (Claude.ai)",
+              "actor": "popup.js",
+              "action": "User clicks 'Grab Data' button",
+              "code": "document.getElementById('grabBtn').addEventListener('click', async () => {\n  // Send message to content.js\n  chrome.tabs.sendMessage(tab.id, { action: \"GRAB_DATA\" }, callback);\n});",
+              "output": null
+            },
+            {
+              "stage": 1,
+              "location": "🔍 Page Content (Still in Browser)",
+              "actor": "content.js",
+              "action": "Extract code block and context from the DOM",
+              "code": "const codeBlocks = document.querySelectorAll('pre, .code-block, [class*=\"artifact\"]');\nconst latestBlock = codeBlocks[codeBlocks.length - 1];\nreturn {\n  code: latestBlock.innerText,\n  context: latestBlock.parentElement.innerText,\n  url: window.location.href,\n  timestamp: new Date().toISOString()\n};",
+              "output": {
+                "type": "json",
+                "data": {
+                  "code": "def hello():\\n    print('Hello')",
+                  "context": "Write a simple greeting function",
+                  "url": "https://claude.ai/chat/abc123",
+                  "timestamp": "2026-04-16T02:48:39.295Z"
+                }
+              }
+            },
+            {
+              "stage": 2,
+              "location": "📤 Back in popup.js",
+              "actor": "popup.js",
+              "action": "Prepare data and send HTTP POST to backend",
+              "code": "const response = await fetch('http://localhost:8000/ingest', {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({\n    code: capturedData.code,\n    context: capturedData.context,\n    url: capturedData.url,\n    source_model: 'Unknown'\n  })\n});",
+              "output": {
+                "type": "http",
+                "method": "POST",
+                "url": "/ingest",
+                "body": "{\n  code: \"def hello():\\\\n    print('Hello')\",\n  context: \"Write a simple greeting function\",\n  url: \"https://claude.ai/chat/abc123\",\n  source_model: \"Unknown\"\n}"
+              }
+            },
+            {
+              "stage": 3,
+              "location": "⚙️ FastAPI Backend (localhost:8000)",
+              "actor": "main.py - @app.post('/ingest')",
+              "action": "Receive request and validate with Pydantic",
+              "code": "@app.post('/ingest')\nasync def ingest_conversation(data: CodeIngestion):\n    # FastAPI automatically validates data against CodeIngestion model\n    # If invalid, it returns 422 Unprocessable Entity\n    print(f'📥 Received code from: {data.url}')\n    return {\n        'status': 'success',\n        'project_id': 'vibe_' + str(hash(data.url))[:8]\n    }",
+              "output": {
+                "type": "json",
+                "data": {
+                  "status": "success",
+                  "message": "Project data cached. Ready for deconstruction.",
+                  "project_id": "vibe_a1b2c3d4"
+                }
+              }
+            },
+            {
+              "stage": 4,
+              "location": "📱 Back to Browser",
+              "actor": "popup.js - Response Handler",
+              "action": "Display success message to user",
+              "code": "const result = await response.json();\nupdateStatus(`✨ Success! Project ID: ${result.project_id}`, 'success');",
+              "output": {
+                "type": "ui",
+                "display": "✨ Success! Project ID: vibe_a1b2c3d4"
+              }
+            }
+          ],
+          "timeline": {
+            "title": "Request/Response Timeline",
+            "segments": [
+              {
+                "phase": "Phase 1: Extraction",
+                "duration": "~100ms",
+                "description": "Browser searches DOM for code blocks"
+              },
+              {
+                "phase": "Phase 2: Transmission",
+                "duration": "~50ms",
+                "description": "HTTP POST from browser to backend"
+              },
+              {
+                "phase": "Phase 3: Validation",
+                "duration": "~10ms",
+                "description": "Pydantic validates CodeIngestion model"
+              },
+              {
+                "phase": "Phase 4: Processing",
+                "duration": "~5ms",
+                "description": "Backend processes and generates response"
+              },
+              {
+                "phase": "Phase 5: Return",
+                "duration": "~50ms",
+                "description": "Response sent back to browser"
+              }
+            ]
+          }
+        },
+        "keyPoints": [
+          "The browser initiates the journey by asking content.js to grab data",
+          "Pydantic validates the data shape before FastAPI even runs your handler function",
+          "CORS headers tell the browser the response is allowed to reach the extension",
+          "The entire round-trip happens in ~215ms—fast enough for a smooth user experience"
+        ]
+      }
+    ],
+    "summary": {
+      "title": "You've Completed Phase 0! 🎉",
+      "recap": [
+        "✅ Understood why CORS middleware bridges the browser-backend gap",
+        "✅ Learned Pydantic models enforce data structure and type safety",
+        "✅ Visualized the complete data journey from extension to backend"
+      ],
+      "nextPhase": "Phase 1: The Teacher Logic",
+      "nextPhaseDescription": "Now that data reaches your backend, we'll build the 'teaching engine'—using Claude's 3.1 Pro model to analyze the ingested code and generate interactive lessons automatically.",
+      "actionItems": [
+        {
+          "title": "Test the Pipeline",
+          "description": "Run the backend, load the extension, and successfully send code from an AI chat to your backend. Watch the terminal logs.",
+          "difficulty": "hands-on"
+        },
+        {
+          "title": "Modify CodeIngestion Model",
+          "description": "Add a new optional field to CodeIngestion (e.g., `language: Optional[str]`) and update the extension to capture it.",
+          "difficulty": "challenge"
+        },
+        {
+          "title": "Explore CORS in Depth",
+          "description": "Research what happens when you remove the CORS middleware. Try making a fetch call—what error do you see?",
+          "difficulty": "exploration"
+        }
+      ]
+    },
+    "metadata": {
+      "createdAt": "2026-04-16T02:48:39.295Z",
+      "version": "1.0.0",
+      "author": "VibeCode Teacher Engine",
+      "tags": [
+        "fastapi",
+        "pydantic",
+        "cors",
+        "chrome-extension",
+        "http",
+        "beginner"
+      ]
+    }
+  }
+}
