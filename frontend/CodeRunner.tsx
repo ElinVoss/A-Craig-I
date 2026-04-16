@@ -39,6 +39,7 @@ interface CodeRunnerProps {
   code: string;
   language: string;          // "python" | "javascript" | "typescript" | other
   showLineNumbers?: boolean;
+  onReplay?: () => void;     // fired each time "Run" is clicked
 }
 
 // ——————————————————————————————————————————————————————————————————
@@ -187,7 +188,7 @@ function languageColor(lang: string): 'default' | 'primary' | 'secondary' {
 // Component
 // ——————————————————————————————————————————————————————————————————
 
-const CodeRunner: React.FC<CodeRunnerProps> = ({ code, language, showLineNumbers = false }) => {
+const CodeRunner: React.FC<CodeRunnerProps> = ({ code, language, showLineNumbers = false, onReplay }) => {
   const [runState, setRunState] = useState<RunState>('idle');
   const [result, setResult] = useState<RunResult | null>(null);
   const [copied, setCopied] = useState(false);
@@ -204,6 +205,7 @@ const CodeRunner: React.FC<CodeRunnerProps> = ({ code, language, showLineNumbers
   const handleRun = useCallback(async () => {
     abortRef.current = false;
     setResult(null);
+    onReplay?.();
 
     if (lang === 'python') {
       setRunState('loading_runtime');

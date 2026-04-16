@@ -12,7 +12,7 @@ from sqlalchemy import func
 from lesson_generator import LessonGenerator
 from schemas import Lesson
 from database import get_db, init_db, check_db_health
-from models import User, Lesson as LessonModel, UserProgress, LessonRating, RefreshToken, ReviewCard, ReviewLog
+from models import User, Lesson as LessonModel, UserProgress, LessonRating, RefreshToken, ReviewCard, ReviewLog, EngagementEvent
 from auth import (
     hash_password, verify_password, 
     create_token_pair, decode_access_token, decode_refresh_token,
@@ -371,37 +371,64 @@ async def generate_and_save_lesson(
     try:
         logger.info(f"🔄 Generating lesson for user: {current_user.email}")
         
-        # Generate lesson
+        # Generate lesson — pass user's depth level for personalised explanations
         lesson_data = lesson_generator.generate_lesson_structured(
             code=request.code,
             context=request.context,
             url=request.url,
             source_model=request.source_model,
             difficulty=request.difficulty,
+            depth_level=getattr(current_user, 'depth_level', 'beginner'),
         )
-        
+
+        # Run validation pass (non-blocking — lesson saved regardless)
+        validation = {"status": None, "issues": [], "confidence": None}
+        try:
+            lesson_dict = lesson_data.get('lesson', lesson_data)
+            validation = lesson_generator.validate_lesson(lesson_dict)
+        except Exception as ve:
+            logger.warning(f"⚠️ Validation pass failed (non-fatal): {ve}")
+
+        # Extract concept graph (non-blocking)
+        concepts_json = None
+        try:
+            lesson_dict = lesson_data.get('lesson', lesson_data)
+            concepts_json = lesson_generator.extract_concepts(lesson_dict)
+        except Exception as ce:
+            logger.warning(f"⚠️ Concept extraction failed (non-fatal): {ce}")
+
         # Save to database
         db_lesson = LessonModel(
             user_id=current_user.id,
-            title=lesson_data.title,
-            description=lesson_data.description,
-            difficulty=lesson_data.difficulty,
-            lesson_json=lesson_data.dict(),
+            title=lesson_data.get('lesson', lesson_data).get('title', 'Untitled'),
+            description=lesson_data.get('lesson', lesson_data).get('description', ''),
+            difficulty=lesson_data.get('lesson', lesson_data).get('difficulty', 'beginner'),
+            lesson_json=lesson_data,
             source_code=request.code,
             source_url=request.url,
+            validation_status=validation.get('status'),
+            validation_notes='; '.join(validation.get('issues', [])) or None,
+            validation_confidence=validation.get('confidence'),
+            concepts_json=concepts_json,
         )
         
         db.add(db_lesson)
         db.commit()
         db.refresh(db_lesson)
         
-        logger.info(f"✅ Lesson saved: {db_lesson.id}")
+        logger.info(f"✅ Lesson saved: {db_lesson.id} | validation={validation.get('status')}")
         
         return {
             "status": "success",
             "message": "Lesson generated and saved",
             "lesson_id": str(db_lesson.id),
-            "data": lesson_data.dict()
+            "validation": {
+                "status": validation.get('status'),
+                "issues": validation.get('issues', []),
+                "confidence": validation.get('confidence'),
+            },
+            "concepts": concepts_json,
+            "data": lesson_data,
         }
         
     except Exception as e:
@@ -521,6 +548,276 @@ async def save_lesson_progress(
     return {
         "status": "success",
         "message": "Progress saved"
+    }
+
+
+# ===== PHASE 5 ENDPOINTS =====
+
+class DepthUpdateRequest(BaseModel):
+    depth_level: str = Field(..., pattern='^(eli5|beginner|intermediate|expert)$')
+
+
+@app.patch("/api/me/depth")
+async def update_depth_level(
+    body: DepthUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update the user's explanation depth preference. Applied to all future lesson generations."""
+    current_user.depth_level = body.depth_level
+    db.commit()
+    return {"status": "success", "depth_level": body.depth_level}
+
+
+class EngagementEventModel(BaseModel):
+    lesson_id: Optional[str] = None
+    event_type: str           # step_time | code_replay | quiz_retry | step_reread
+    step_id: Optional[str] = None
+    value: Optional[float] = None
+    metadata: Optional[dict] = None
+
+
+@app.post("/api/events")
+async def ingest_engagement_events(
+    events: list[EngagementEventModel],
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Batch ingest engagement events for aha-moment detection.
+    Fire-and-forget — frontend doesn't need to wait.
+    Events are used to identify anchor memories and boost review card weights.
+    """
+    for e in events:
+        db_event = EngagementEvent(
+            user_id=current_user.id,
+            lesson_id=e.lesson_id,
+            event_type=e.event_type,
+            step_id=e.step_id,
+            value=e.value,
+            metadata=e.metadata,
+        )
+        db.add(db_event)
+
+    # Aha-moment detection: step_time > 45s on a step that was then answered correctly
+    # is a strong signal — flag those review cards for priority scheduling
+    for e in events:
+        if e.event_type == 'step_time' and e.value and e.value > 45 and e.lesson_id:
+            card = db.query(ReviewCard).filter(
+                ReviewCard.user_id == current_user.id,
+                ReviewCard.lesson_id == e.lesson_id,
+            ).first()
+            if card:
+                # Boost easiness factor slightly — the extra time spent paid off
+                new_ef = min(float(card.easiness_factor) + 0.1, 3.0)
+                card.easiness_factor = new_ef
+                logger.info(f"🧠 Aha-moment detected on step {e.step_id} — boosted EF to {new_ef:.2f}")
+
+    db.commit()
+    return {"status": "success", "events_recorded": len(events)}
+
+
+@app.get("/api/lessons/{lesson_id}/concepts")
+async def get_lesson_concepts(
+    lesson_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Return cached concept graph for a lesson.
+    If not yet extracted (older lessons), trigger extraction now.
+    Also cross-references with user's existing lessons to flag covered/missing prereqs.
+    """
+    lesson = db.query(LessonModel).filter(
+        LessonModel.id == lesson_id,
+        LessonModel.user_id == current_user.id
+    ).first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+
+    # Trigger extraction if missing
+    if not lesson.concepts_json and lesson_generator:
+        try:
+            lesson_dict = lesson.lesson_json
+            if isinstance(lesson_dict, dict) and 'lesson' in lesson_dict:
+                lesson_dict = lesson_dict['lesson']
+            concepts = lesson_generator.extract_concepts(lesson_dict)
+            lesson.concepts_json = concepts
+            db.commit()
+        except Exception as e:
+            logger.warning(f"⚠️ Concept extraction failed: {e}")
+
+    concepts = lesson.concepts_json or {}
+    prerequisites = concepts.get('prerequisites', [])
+
+    # Check which prerequisites the user already has lessons for
+    user_lesson_titles = [
+        l.title.lower() for l in
+        db.query(LessonModel.title).filter(LessonModel.user_id == current_user.id).all()
+    ]
+    covered = [p for p in prerequisites if any(p.lower() in title for title in user_lesson_titles)]
+    missing  = [p for p in prerequisites if p not in covered]
+
+    return {
+        "primary_concepts": concepts.get('primary_concepts', []),
+        "prerequisites": prerequisites,
+        "difficulty_context": concepts.get('difficulty_context', ''),
+        "covered_prerequisites": covered,
+        "missing_prerequisites": missing,
+    }
+
+
+@app.get("/api/analytics/dashboard")
+async def get_analytics_dashboard(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Aggregate learning analytics for the dashboard.
+    This is the primary Pro tier conversion hook — free users see the gap,
+    Pro users see the recommendations.
+    """
+    now = datetime.utcnow()
+    week_ago = now - timedelta(days=7)
+
+    # ── Core stats ────────────────────────────────────────────────
+    total_lessons = db.query(LessonModel).filter(
+        LessonModel.user_id == current_user.id
+    ).count()
+
+    lessons_this_week = db.query(LessonModel).filter(
+        LessonModel.user_id == current_user.id,
+        LessonModel.created_at >= week_ago,
+    ).count()
+
+    total_cards = db.query(ReviewCard).filter(
+        ReviewCard.user_id == current_user.id
+    ).count()
+
+    due_today = db.query(ReviewCard).filter(
+        ReviewCard.user_id == current_user.id,
+        ReviewCard.due_date <= now,
+        ReviewCard.is_suspended == False,
+    ).count()
+
+    total_reviews = db.query(ReviewLog).filter(
+        ReviewLog.user_id == current_user.id
+    ).count()
+
+    reviews_this_week_all = db.query(ReviewLog).filter(
+        ReviewLog.user_id == current_user.id,
+        ReviewLog.reviewed_at >= week_ago,
+    ).all()
+
+    reviews_this_week = len(reviews_this_week_all)
+    correct_this_week = sum(1 for r in reviews_this_week_all if r.rating >= 3)
+    accuracy_this_week = (correct_this_week / reviews_this_week) if reviews_this_week > 0 else 0.0
+
+    avg_easiness_row = db.query(func.avg(ReviewCard.easiness_factor)).filter(
+        ReviewCard.user_id == current_user.id
+    ).scalar()
+    avg_easiness = float(avg_easiness_row) if avg_easiness_row else 2.5
+
+    # ── Streak: consecutive days with at least one review ─────────
+    all_review_dates = sorted(set(
+        r.reviewed_at.date()
+        for r in db.query(ReviewLog).filter(ReviewLog.user_id == current_user.id).all()
+    ), reverse=True)
+
+    streak_days = 0
+    if all_review_dates:
+        from datetime import date, timedelta as td
+        check = date.today()
+        for d in all_review_dates:
+            if d == check or d == check - td(days=1):
+                streak_days += 1
+                check = d
+            else:
+                break
+
+    # ── 7-day activity (one entry per day) ────────────────────────
+    activity = []
+    for i in range(6, -1, -1):
+        day = (now - timedelta(days=i)).date()
+        day_reviews = [r for r in reviews_this_week_all if r.reviewed_at.date() == day]
+        activity.append({
+            "date": str(day),
+            "reviews": len(day_reviews),
+            "correct": sum(1 for r in day_reviews if r.rating >= 3),
+        })
+
+    # ── Recent lessons (last 10) ──────────────────────────────────
+    recent = db.query(LessonModel).filter(
+        LessonModel.user_id == current_user.id
+    ).order_by(LessonModel.created_at.desc()).limit(10).all()
+
+    recent_lessons = []
+    for lesson in recent:
+        progress = db.query(UserProgress).filter(
+            UserProgress.lesson_id == lesson.id,
+            UserProgress.user_id == current_user.id,
+        ).first()
+        recent_lessons.append({
+            "id": str(lesson.id),
+            "title": lesson.title,
+            "difficulty": lesson.difficulty or "beginner",
+            "created_at": lesson.created_at.isoformat(),
+            "validation_status": lesson.validation_status,
+            "is_completed": progress.is_completed if progress else False,
+        })
+
+    # ── Concept mastery (top 8 by review volume) ─────────────────
+    # Proxy: use lessons with concepts_json + their linked review cards
+    concept_scores: dict = {}
+    lessons_with_concepts = db.query(LessonModel).filter(
+        LessonModel.user_id == current_user.id,
+        LessonModel.concepts_json.isnot(None),
+    ).all()
+
+    for lesson in lessons_with_concepts:
+        card = db.query(ReviewCard).filter(
+            ReviewCard.lesson_id == lesson.id,
+            ReviewCard.user_id == current_user.id,
+        ).first()
+        if not card:
+            continue
+        ef = float(card.easiness_factor)
+        # Normalize EF (1.3 = 0%, 3.0 = 100%) to mastery score
+        mastery = max(0.0, min(1.0, (ef - 1.3) / 1.7))
+        logs = db.query(ReviewLog).filter(ReviewLog.card_id == card.id).count()
+
+        for concept in (lesson.concepts_json or {}).get('primary_concepts', []):
+            if concept not in concept_scores:
+                concept_scores[concept] = {"mastery_sum": 0, "count": 0, "reviews": 0}
+            concept_scores[concept]["mastery_sum"] += mastery
+            concept_scores[concept]["count"] += 1
+            concept_scores[concept]["reviews"] += logs
+
+    top_concepts = sorted([
+        {
+            "name": name,
+            "mastery": round(v["mastery_sum"] / v["count"], 3),
+            "reviews": v["reviews"],
+        }
+        for name, v in concept_scores.items()
+    ], key=lambda x: x["reviews"], reverse=True)[:8]
+
+    return {
+        "status": "success",
+        "stats": {
+            "lessons_this_week": lessons_this_week,
+            "total_lessons": total_lessons,
+            "total_cards": total_cards,
+            "due_today": due_today,
+            "streak_days": streak_days,
+            "total_reviews": total_reviews,
+            "reviews_this_week": reviews_this_week,
+            "accuracy_this_week": round(accuracy_this_week, 3),
+            "avg_easiness": round(avg_easiness, 2),
+        },
+        "activity": activity,
+        "top_concepts": top_concepts,
+        "recent_lessons": recent_lessons,
     }
 
 

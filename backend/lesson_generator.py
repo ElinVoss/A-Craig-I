@@ -30,6 +30,15 @@ class LessonGenerator:
         genai.configure(api_key=self.api_key)
         self.model = genai.GenerativeModel("gemini-2.0-flash")
 
+    def _parse_json(self, text: str) -> dict:
+        """Strip markdown fences and parse JSON response from Gemini."""
+        text = text.strip()
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
+        return json.loads(text)
+
     def generate_lesson(
         self,
         code: str,
@@ -37,6 +46,7 @@ class LessonGenerator:
         url: str,
         source_model: Optional[str] = "Unknown",
         difficulty: str = "beginner",
+        depth_level: str = "beginner",
     ) -> LessonWrapper:
         """
         Generate a complete lesson from code and context.
@@ -52,8 +62,19 @@ class LessonGenerator:
             A LessonWrapper containing a fully structured Lesson
         """
         
+        # Depth level → explanation style instructions
+        DEPTH_INSTRUCTIONS = {
+            'eli5':         'Use simple analogies and zero jargon. Explain everything like the reader has never programmed before. Use metaphors from everyday life (cooking, driving, etc.).',
+            'beginner':     'Plain English, step by step. Assume the reader knows what variables and functions are, but nothing else. Avoid acronyms without explanation.',
+            'intermediate': 'Assume solid programming basics. Explain the real mechanics, mention edge cases, time complexity where relevant. Use correct technical terminology.',
+            'expert':       'Senior developer audience. Skip fundamentals entirely. Focus on tradeoffs, gotchas, performance implications, and design patterns. Be terse.',
+        }
+        depth_instruction = DEPTH_INSTRUCTIONS.get(depth_level, DEPTH_INSTRUCTIONS['beginner'])
+
         # Build the prompt
-        system_prompt = """You are the VibeCode Teacher Engine. Your job is to take raw code from an AI chat and deconstruct it into an interactive, 3-step lesson for a beginner programmer.
+        system_prompt = f"""You are the VibeCode Teacher Engine. Your job is to take raw code from an AI chat and deconstruct it into an interactive, 3-step lesson.
+
+EXPLANATION STYLE: {depth_instruction}
 
 The lesson MUST have exactly 3 steps:
 1. **Concept Step** (Hook): Explain the "why" and core concept. Include a quiz with 4 options where only 1 is correct.
@@ -72,7 +93,7 @@ CRITICAL REQUIREMENTS:
 
 Return ONLY a valid JSON object matching the Lesson schema. No markdown, no explanations, just JSON."""
 
-        user_prompt = f"""Generate a beginner-friendly, 3-step interactive lesson for this code:
+        user_prompt = f"""Generate a {depth_level}-level, 3-step interactive lesson for this code:
 
 CODE:
 ```
@@ -150,8 +171,105 @@ Remember: Exactly 3 steps, with quiz/exercise/visualization. Follow the schema p
         Returns:
             Dictionary representation of the lesson (JSON-serializable)
         """
-        wrapper = self.generate_lesson(code, context, url, source_model, difficulty)
+    def generate_lesson_structured(
+        self,
+        code: str,
+        context: str,
+        url: str,
+        source_model: Optional[str] = "Unknown",
+        difficulty: str = "beginner",
+        depth_level: str = "beginner",
+    ) -> dict:
+        """
+        Generate a lesson and return as a dictionary (for JSON serialization).
+        Passes depth_level through to tailor explanation style.
+        """
+        wrapper = self.generate_lesson(code, context, url, source_model, difficulty, depth_level)
         return wrapper.model_dump()
+
+    def extract_concepts(self, lesson: dict) -> dict:
+        """
+        Extract the primary concepts this lesson teaches and what prerequisites it assumes.
+        Called after lesson generation; result is cached on the Lesson row.
+
+        Returns:
+            {
+              primary_concepts: ["concept1", "concept2"],
+              prerequisites:    ["prereq1", "prereq2"],
+              difficulty_context: "why this difficulty was chosen"
+            }
+        """
+        title = lesson.get('title', '')
+        steps = lesson.get('steps', [])
+        step_titles = ' · '.join(s.get('title', '') for s in steps)
+
+        prompt = f"""Analyze this lesson and extract key programming concepts.
+
+LESSON TITLE: {title}
+STEP TITLES: {step_titles}
+
+Respond with ONLY valid JSON (no markdown):
+{{
+  "primary_concepts": ["2-4 specific concepts THIS lesson teaches"],
+  "prerequisites": ["0-3 concepts a student should know BEFORE this lesson"],
+  "difficulty_context": "one sentence: why this difficulty level is appropriate"
+}}"""
+
+        response = self.model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(temperature=0.2, max_output_tokens=256),
+        )
+        return self._parse_json(response.text)
+
+    def validate_lesson(self, lesson: dict) -> dict:
+        """
+        Second LLM pass: checks lesson quality, factual accuracy, and code correctness.
+        Prevents AI hallucinations from becoming learned facts.
+
+        Returns:
+            {
+              status: "pass" | "warn" | "fail",
+              issues: ["issue1"],
+              confidence: 0.0-1.0
+            }
+        """
+        steps = lesson.get('steps', [])
+        code_blocks = []
+        explanations = []
+        for step in steps:
+            content = step.get('content', {})
+            highlight = content.get('codeHighlight') or {}
+            if highlight.get('snippet'):
+                code_blocks.append(f"[{highlight.get('language','?')}]\n{highlight['snippet'][:400]}")
+            if content.get('explanation'):
+                explanations.append(content['explanation'][:200])
+
+        prompt = f"""You are a technical editor. Review this programming lesson for quality issues.
+
+LESSON TITLE: {lesson.get('title', '')}
+DIFFICULTY: {lesson.get('difficulty', '')}
+
+CODE BLOCKS:
+{chr(10).join(code_blocks) if code_blocks else "(no code blocks)"}
+
+KEY EXPLANATIONS:
+{chr(10).join(explanations) if explanations else "(no explanations)"}
+
+Check: (1) Does the code match what the explanation says? (2) Any factual errors?
+(3) Is the explanation appropriate for the stated difficulty? (4) Any contradictions?
+
+Respond with ONLY valid JSON (no markdown):
+{{
+  "status": "pass",
+  "issues": [],
+  "confidence": 0.9
+}}"""
+
+        response = self.model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(temperature=0.1, max_output_tokens=256),
+        )
+        return self._parse_json(response.text)
 
     def generate_misconception_explanation(
         self,
@@ -190,13 +308,4 @@ Respond with ONLY valid JSON — no markdown, no wrapper:
                 max_output_tokens=512,
             ),
         )
-
-        text = response.text.strip()
-
-        # Strip markdown code fences if present
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0].strip()
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0].strip()
-
-        return json.loads(text)
+        return self._parse_json(response.text)

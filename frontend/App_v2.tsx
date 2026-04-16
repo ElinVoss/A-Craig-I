@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Box, AppBar, Toolbar, Button, Typography, Badge } from '@mui/material';
+import { Box, AppBar, Toolbar, Button, Typography, Badge, MenuItem, Menu } from '@mui/material';
 import { AuthProvider, useAuth } from './AuthContext';
 import { AuthModal } from './AuthModal';
 import { LessonRenderer } from './LessonRenderer_v2';
 import { LessonLibrary } from './LessonLibrary';
 import { DailyReview } from './DailyReview';
+import { AnalyticsDashboard } from './AnalyticsDashboard';
+import { DepthSlider, DepthLevel } from './DepthSlider';
 import { BookOpen, LogOut } from 'lucide-react';
 
 // Sample lesson for demonstration
@@ -175,24 +177,29 @@ useEffect(() => {
 };
 
 interface AppProps {
-  initialView?: 'library' | 'lesson' | 'home' | 'review';
+  initialView?: 'library' | 'lesson' | 'home' | 'review' | 'analytics';
 }
 
 const AppContent: React.FC<AppProps> = ({ initialView = 'home' }) => {
   const { isAuthenticated, user, logout, api } = useAuth();
-  const [currentView, setCurrentView] = useState<'library' | 'lesson' | 'home' | 'review'>(
+  const [currentView, setCurrentView] = useState<'library' | 'lesson' | 'home' | 'review' | 'analytics'>(
     initialView
   );
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null);
   const [dueCount, setDueCount] = useState(0);
+  const [depthLevel, setDepthLevel] = useState<DepthLevel>('beginner');
+  const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
 
-  // Fetch review due count whenever auth state changes
+  // Fetch review due count + user depth on auth
   useEffect(() => {
     if (!isAuthenticated) { setDueCount(0); return; }
     api.get('/api/review/stats')
       .then((res) => setDueCount(res.data.due_today ?? 0))
       .catch(() => setDueCount(0));
+    api.get('/api/me')
+      .then((res) => setDepthLevel((res.data.depth_level ?? 'beginner') as DepthLevel))
+      .catch(() => {});
   }, [isAuthenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSelectLesson = (lessonId: string) => {
@@ -233,17 +240,46 @@ const AppContent: React.FC<AppProps> = ({ initialView = 'home' }) => {
                     🧠 Review
                   </Button>
                 </Badge>
+                <Button
+                  variant={currentView === 'analytics' ? 'contained' : 'text'}
+                  onClick={() => setCurrentView('analytics')}
+                  size="small"
+                >
+                  📊 Analytics
+                </Button>
                 <Typography variant="body2" className="text-slate-600">
                   {user?.username}
                 </Typography>
+                {/* User menu with depth slider */}
                 <Button
                   size="small"
-                  startIcon={<LogOut className="w-4 h-4" />}
-                  onClick={logout}
+                  onClick={(e) => setUserMenuAnchor(e.currentTarget)}
                   variant="outlined"
                 >
-                  Logout
+                  ⚙️
                 </Button>
+                <Menu
+                  anchorEl={userMenuAnchor}
+                  open={!!userMenuAnchor}
+                  onClose={() => setUserMenuAnchor(null)}
+                  PaperProps={{ sx: { p: 2, minWidth: 340 } }}
+                >
+                  <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1.5 }}>
+                    Settings
+                  </Typography>
+                  <DepthSlider
+                    currentDepth={depthLevel}
+                    onDepthChange={(d) => { setDepthLevel(d); setUserMenuAnchor(null); }}
+                  />
+                  <Box sx={{ mt: 2, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
+                    <MenuItem
+                      onClick={() => { logout(); setUserMenuAnchor(null); }}
+                      sx={{ color: 'error.main', borderRadius: 1 }}
+                    >
+                      <LogOut size={14} style={{ marginRight: 8 }} /> Logout
+                    </MenuItem>
+                  </Box>
+                </Menu>
               </>
             )}
             {!isAuthenticated && (
@@ -321,6 +357,10 @@ const AppContent: React.FC<AppProps> = ({ initialView = 'home' }) => {
 
       {currentView === 'review' && isAuthenticated && (
         <DailyReview onBack={() => setCurrentView('home')} />
+      )}
+
+      {currentView === 'analytics' && isAuthenticated && (
+        <AnalyticsDashboard />
       )}
 
       {currentView === 'lesson' && (

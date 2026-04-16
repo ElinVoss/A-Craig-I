@@ -29,6 +29,7 @@ import { Code, Lightbulb, Route, Save, BookOpen } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import CodeRunner from './CodeRunner';
 import { MisconceptionModal } from './MisconceptionModal';
+import { KnowledgeGraph } from './KnowledgeGraph';
 
 // Type definitions
 interface QuizOption {
@@ -89,6 +90,8 @@ interface Lesson {
   difficulty: string;
   learningObjectives: string[];
   steps: LessonStep[];
+  validation_status?: 'pass' | 'warn' | 'fail';
+  validation_notes?: string;
 }
 
 interface LessonRendererProps {
@@ -261,6 +264,9 @@ export const LessonRenderer: React.FC<LessonRendererProps> = ({
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // Aha-moment tracking: record when each step was entered
+  const stepEnteredAt = React.useRef<number>(Date.now());
+
   // Misconception modal state
   const [misconception, setMisconception] = useState<{
     open: boolean;
@@ -271,15 +277,32 @@ export const LessonRenderer: React.FC<LessonRendererProps> = ({
 
   const handleNext = () => {
     if (activeStep < lessonData.steps.length - 1) {
+      // Fire step_time event before advancing
+      const timeSpent = (Date.now() - stepEnteredAt.current) / 1000;
+      fireEngagementEvent('step_time', currentStep?.id, timeSpent);
+      stepEnteredAt.current = Date.now();
       setActiveStep(activeStep + 1);
     }
   };
 
   const handlePrevious = () => {
     if (activeStep > 0) {
+      fireEngagementEvent('step_reread', currentStep?.id, 1);
+      stepEnteredAt.current = Date.now();
       setActiveStep(activeStep - 1);
     }
   };
+
+  // Fire-and-forget engagement event to backend aha detector
+  const fireEngagementEvent = useCallback((type: string, stepId?: string, value?: number) => {
+    if (!isAuthenticated || !lessonData.id) return;
+    api.post('/api/events', [{
+      lesson_id: lessonData.id,
+      event_type: type,
+      step_id: stepId,
+      value: value,
+    }]).catch(() => {}); // non-fatal
+  }, [api, isAuthenticated, lessonData.id]);
 
   // Auto-enqueue lesson for spaced repetition when the user completes the final step
   const handleLessonComplete = useCallback(async () => {
@@ -416,6 +439,15 @@ export const LessonRenderer: React.FC<LessonRendererProps> = ({
                 }
                 variant="outlined"
               />
+              {lessonData.validation_status && lessonData.validation_status !== 'pass' && (
+                <Chip
+                  label={lessonData.validation_status === 'fail' ? '⚠ Needs Review' : '⚠ Unverified'}
+                  color={lessonData.validation_status === 'fail' ? 'error' : 'warning'}
+                  size="small"
+                  title={lessonData.validation_notes ?? ''}
+                  sx={{ ml: 1 }}
+                />
+              )}
             </div>
 
             {/* Learning Objectives */}
@@ -449,13 +481,31 @@ export const LessonRenderer: React.FC<LessonRendererProps> = ({
           {lessonData.steps.map((step, idx) => (
             <Step
               key={step.id}
-              onClick={() => setActiveStep(idx)}
+              onClick={() => {
+                fireEngagementEvent('step_reread', lessonData.steps[activeStep]?.id, 1);
+                stepEnteredAt.current = Date.now();
+                setActiveStep(idx);
+              }}
               className="cursor-pointer"
             >
               <StepLabel>{step.title}</StepLabel>
             </Step>
           ))}
         </Stepper>
+
+        {/* Knowledge Graph — concept dependency map */}
+        {lessonData.id && (
+          <Box className="mb-6">
+            <KnowledgeGraph
+              lessonId={lessonData.id}
+              lessonTitle={lessonData.title}
+              onGenerateLesson={(concept) => {
+                // bubble up to App_v2 if navigation is wired
+                console.info('[KnowledgeGraph] generate lesson for concept:', concept);
+              }}
+            />
+          </Box>
+        )}
 
         {/* Step Content */}
         {currentStep && (
@@ -491,6 +541,7 @@ export const LessonRenderer: React.FC<LessonRendererProps> = ({
                     code={codeHighlight?.snippet ?? codeSnippet ?? ''}
                     language={codeHighlight?.language ?? 'javascript'}
                     showLineNumbers
+                    onReplay={() => fireEngagementEvent('code_replay', currentStep?.id, 1)}
                   />
                 </Box>
               )}

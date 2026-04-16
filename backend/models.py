@@ -26,6 +26,7 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
     is_active = Column(Boolean, default=True)
+    depth_level = Column(String(20), default='beginner', nullable=False)  # eli5/beginner/intermediate/expert
 
     # Relationships
     lessons = relationship("Lesson", back_populates="user", cascade="all, delete-orphan")
@@ -33,6 +34,7 @@ class User(Base):
     ratings = relationship("LessonRating", back_populates="user", cascade="all, delete-orphan")
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
     review_cards = relationship("ReviewCard", back_populates="user", cascade="all, delete-orphan")
+    engagement_events = relationship("EngagementEvent", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User {self.email}>"
@@ -55,6 +57,12 @@ class Lesson(Base):
     is_public = Column(Boolean, default=False)
     rating_count = Column(Integer, default=0)
     average_rating = Column(DECIMAL(3, 2), default=0)
+
+    # Phase 5: validation + concept graph cache
+    validation_status = Column(String(20), nullable=True)       # pass / warn / fail
+    validation_notes = Column(Text, nullable=True)
+    validation_confidence = Column(DECIMAL(3, 2), nullable=True)
+    concepts_json = Column(JSON, nullable=True)                  # {primary_concepts, prerequisites}
 
     # Relationships
     user = relationship("User", back_populates="lessons")
@@ -204,3 +212,41 @@ class RefreshToken(Base):
 
     def __repr__(self):
         return f"<RefreshToken user={self.user_id}>"
+
+
+# ===== PHASE 5 MODELS =====
+
+class EngagementEvent(Base):
+    """
+    Aha-moment detector inputs. Tracks micro-behaviours during lesson consumption.
+
+    event_type values:
+      step_time   — seconds spent on a step (value = float seconds)
+      code_replay — user re-ran a code block (value = replay count)
+      quiz_retry  — user re-attempted after wrong answer (value = attempt number)
+      step_reread — user navigated back to a completed step (value = 1.0)
+
+    These events feed the aha-moment scoring logic:
+      slow_read + correct_answer + re_read = anchor memory candidate
+      → ReviewCard for this step gets boosted weight in SM-2
+    """
+    __tablename__ = "engagement_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    lesson_id = Column(UUID(as_uuid=True), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=True)
+    event_type = Column(String(50), nullable=False)
+    step_id = Column(String(100), nullable=True)
+    value = Column(DECIMAL(10, 3), nullable=True)
+    metadata = Column(JSON, nullable=True)
+    recorded_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    user = relationship("User", back_populates="engagement_events")
+
+    __table_args__ = (
+        Index('idx_engagement_user', 'user_id', 'recorded_at'),
+        Index('idx_engagement_type', 'event_type'),
+    )
+
+    def __repr__(self):
+        return f"<EngagementEvent {self.event_type} user={self.user_id}>"
