@@ -1,18 +1,8 @@
 import React, { useState } from 'react';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-  Input,
-  Button,
-  Alert,
-  AlertDescription,
-} from '@/components/ui';
+  Dialog, DialogContent, DialogTitle, Tabs, Tab, Box,
+  TextField, Button, Alert, CircularProgress,
+} from '@mui/material';
 import { useAuth } from './AuthContext';
 
 interface AuthModalProps {
@@ -73,125 +63,46 @@ export const AuthModal: React.FC<AuthModalProps> = ({ open, onOpenChange }) => {
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader>
-          <DialogTitle>VibeCode Academy</DialogTitle>
-        </DialogHeader>
-
-        <Tabs value={tab} onValueChange={(v) => setTab(v as 'login' | 'signup')}>
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="login">Login</TabsTrigger>
-            <TabsTrigger value="signup">Sign Up</TabsTrigger>
-          </TabsList>
-
-          {/* Login Tab */}
-          <TabsContent value="login">
-            <form onSubmit={handleLogin} className="space-y-4">
-              {error && (
-                <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-
-              <div>
-                <label className="text-sm font-medium">Email</label>
-                <Input
-                  type="email"
-                  placeholder="you@example.com"
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  disabled={loading}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">Password</label>
-                <Input
-                  type="password"
-                  placeholder="••••••••"
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  disabled={loading}
-                  required
-                />
-              </div>
-
-              <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? 'Logging in...' : 'Login'}
-              </Button>
-            </form>
-          </TabsContent>
-
-          {/* Signup Tab */}
-          <TabsContent value="signup">
-            <form onSubmit={handleSignup} className="space-y-4">
-              {error && (
-                <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-
-              <div>
-                <label className="text-sm font-medium">Email</label>
-                <Input
-                  type="email"
-                  placeholder="you@example.com"
-                  value={signupEmail}
-                  onChange={(e) => setSignupEmail(e.target.value)}
-                  disabled={loading}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">Username</label>
-                <Input
-                  type="text"
-                  placeholder="username"
-                  value={signupUsername}
-                  onChange={(e) => setSignupUsername(e.target.value)}
-                  disabled={loading}
-                  minLength={3}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">Password</label>
-                <Input
-                  type="password"
-                  placeholder="••••••••"
-                  value={signupPassword}
-                  onChange={(e) => setSignupPassword(e.target.value)}
-                  disabled={loading}
-                  minLength={8}
-                  required
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Min 8 chars, uppercase, lowercase, digit
-                </p>
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">Confirm Password</label>
-                <Input
-                  type="password"
-                  placeholder="••••••••"
-                  value={signupConfirm}
-                  onChange={(e) => setSignupConfirm(e.target.value)}
-                  disabled={loading}
-                  required
-                />
-              </div>
-
-              <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? 'Creating account...' : 'Sign Up'}
-              </Button>
-            </form>
-          </TabsContent>
+    <Dialog open={open} onClose={() => onOpenChange(false)} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ textAlign: 'center', fontWeight: 700 }}>VibeCode Academy</DialogTitle>
+      <DialogContent>
+        <Tabs value={tab} onChange={(_, v) => setTab(v)} centered sx={{ mb: 2 }}>
+          <Tab label="Login" value="login" />
+          <Tab label="Sign Up" value="signup" />
         </Tabs>
+
+        {tab === 'login' && (
+          <Box component="form" onSubmit={handleLogin} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {error && <Alert severity="error">{error}</Alert>}
+            <TextField label="Email" type="email" value={loginEmail}
+              onChange={(e) => setLoginEmail(e.target.value)} disabled={loading} required size="small" />
+            <TextField label="Password" type="password" value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)} disabled={loading} required size="small" />
+            <Button type="submit" variant="contained" disabled={loading} fullWidth>
+              {loading ? <CircularProgress size={20} /> : 'Login'}
+            </Button>
+          </Box>
+        )}
+
+        {tab === 'signup' && (
+          <Box component="form" onSubmit={handleSignup} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {error && <Alert severity="error">{error}</Alert>}
+            <TextField label="Email" type="email" value={signupEmail}
+              onChange={(e) => setSignupEmail(e.target.value)} disabled={loading} required size="small" />
+            <TextField label="Username" type="text" value={signupUsername}
+              onChange={(e) => setSignupUsername(e.target.value)} disabled={loading} required size="small"
+              inputProps={{ minLength: 3 }} />
+            <TextField label="Password" type="password" value={signupPassword}
+              onChange={(e) => setSignupPassword(e.target.value)} disabled={loading} required size="small"
+              inputProps={{ minLength: 8 }}
+              helperText="Min 8 chars, uppercase, lowercase, digit" />
+            <TextField label="Confirm Password" type="password" value={signupConfirm}
+              onChange={(e) => setSignupConfirm(e.target.value)} disabled={loading} required size="small" />
+            <Button type="submit" variant="contained" disabled={loading} fullWidth>
+              {loading ? <CircularProgress size={20} /> : 'Sign Up'}
+            </Button>
+          </Box>
+        )}
       </DialogContent>
     </Dialog>
   );

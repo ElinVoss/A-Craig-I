@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Box, Typography, TextField, Button, Card, CardContent,
-  Alert, CircularProgress, Chip, List, ListItem, ListItemText
+  Alert, CircularProgress, Chip, List, ListItemButton, ListItemText
 } from '@mui/material';
 import { Github, BookOpen, ArrowRight } from 'lucide-react';
 import { useAuth } from './AuthContext';
@@ -113,11 +113,10 @@ export const GitHubReader: React.FC<GitHubReaderProps> = ({ onLessonGenerated })
       </Typography>
       <List dense>
         {EXAMPLE_URLS.map((exUrl) => (
-          <ListItem
+          <ListItemButton
             key={exUrl}
-            button
             onClick={() => setUrl(exUrl)}
-            sx={{ borderRadius: 1, '&:hover': { bgcolor: 'action.hover' } }}
+            sx={{ borderRadius: 1 }}
           >
             <ListItemText
               primary={exUrl.split('/blob/')[1] || exUrl}
@@ -125,7 +124,7 @@ export const GitHubReader: React.FC<GitHubReaderProps> = ({ onLessonGenerated })
               primaryTypographyProps={{ variant: 'body2', fontFamily: 'monospace' }}
               secondaryTypographyProps={{ variant: 'caption' }}
             />
-          </ListItem>
+          </ListItemButton>
         ))}
       </List>
     </Box>

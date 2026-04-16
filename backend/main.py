@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthCredential
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 import uvicorn
@@ -79,7 +79,7 @@ class LessonGenerationRequest(BaseModel):
 class UserSignupRequest(BaseModel):
     email: EmailStr
     username: str = Field(..., min_length=3, max_length=100)
-    password: str = Field(..., min_length=8)
+    password: str  # strength validated in endpoint via validate_password_strength()
 
 
 class UserLoginRequest(BaseModel):
@@ -277,7 +277,7 @@ async def refresh_access_token(request: RefreshTokenRequest, db: Session = Depen
 # ===== PROTECTED ROUTE HELPER =====
 
 async def get_current_user(
-    credentials: HTTPAuthCredential = Depends(security),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
     """
@@ -630,7 +630,7 @@ async def ingest_engagement_events(
             event_type=e.event_type,
             step_id=e.step_id,
             value=e.value,
-            metadata=e.metadata,
+            event_metadata=e.metadata,
         )
         db.add(db_event)
 

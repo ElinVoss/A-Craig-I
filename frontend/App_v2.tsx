@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Box, AppBar, Toolbar, Button, Typography, Badge, MenuItem, Menu } from '@mui/material';
 import { AuthProvider, useAuth } from './AuthContext';
 import { AuthModal } from './AuthModal';
-import { LessonRenderer } from './LessonRenderer_v2';
+import { LessonRenderer, Lesson } from './LessonRenderer_v2';
 import { LessonLibrary } from './LessonLibrary';
 import { DailyReview } from './DailyReview';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
@@ -14,7 +14,7 @@ import { GitHubReader } from './GitHubReader';
 import { JobGapAnalysis } from './JobGapAnalysis';
 
 // Sample lesson for demonstration
-const SAMPLE_LESSON = {
+const SAMPLE_LESSON: Lesson = {
   title: 'Understanding React Hooks',
   description: 'Learn how React Hooks revolutionized functional components',
   difficulty: 'beginner',

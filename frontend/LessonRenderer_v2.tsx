@@ -73,7 +73,7 @@ interface StepContent {
   exercise?: Exercise;
 }
 
-interface LessonStep {
+export interface LessonStep {
   id: string;
   title: string;
   type: 'concept' | 'exercise' | 'visualization';
@@ -83,7 +83,7 @@ interface LessonStep {
   exercise?: Exercise;
 }
 
-interface Lesson {
+export interface Lesson {
   id?: string;
   title: string;
   description: string;

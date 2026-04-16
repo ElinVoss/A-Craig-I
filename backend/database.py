@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Get database URL from environment
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://user:password@localhost:5432/vibeCode"
+    "postgresql+psycopg://user:password@localhost:5432/vibeCode"
 )
 
 # Create engine with connection pooling
@@ -77,7 +77,7 @@ def init_db():
     Initialize database (create all tables).
     Should be called once during app startup or after migrations.
     """
-    from .models import Base
+    from models import Base
     
     logger.info("Initializing database...")
     Base.metadata.create_all(bind=engine)
@@ -88,7 +88,7 @@ def drop_db():
     """
     Drop all tables (DANGEROUS - for testing only).
     """
-    from .models import Base
+    from models import Base
     
     logger.warning("⚠️ Dropping all tables...")
     Base.metadata.drop_all(bind=engine)

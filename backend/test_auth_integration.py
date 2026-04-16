@@ -208,7 +208,7 @@ class TestTokenRefresh:
     
     @pytest.fixture(autouse=True)
     def setup(self):
-        """Create test user and get tokens."""
+        """Create test user and get tokens. Falls back to login if user exists."""
         response = client.post(
             "/api/auth/signup",
             json={
@@ -217,6 +217,15 @@ class TestTokenRefresh:
                 "password": "RefreshPass123"
             }
         )
+        if response.status_code not in (200, 201):
+            # User already exists from a prior test run — log in instead
+            response = client.post(
+                "/api/auth/login",
+                json={
+                    "email": "refresh@example.com",
+                    "password": "RefreshPass123"
+                }
+            )
         self.refresh_token = response.json()["tokens"]["refresh_token"]
         self.access_token = response.json()["tokens"]["access_token"]
     
@@ -249,12 +258,12 @@ class TestProtectedRoutes:
     def test_get_lessons_no_auth(self):
         """GET /api/lessons without auth should fail."""
         response = client.get("/api/lessons")
-        assert response.status_code == 403  # Forbidden (no credentials)
+        assert response.status_code == 401  # Unauthorized (no credentials)
     
     def test_get_me_no_auth(self):
         """GET /api/me without auth should fail."""
         response = client.get("/api/me")
-        assert response.status_code == 403
+        assert response.status_code == 401
     
     def test_get_me_with_auth(self):
         """GET /api/me with valid auth should succeed."""

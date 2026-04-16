@@ -52,7 +52,7 @@ export const CommunityLibrary: React.FC<CommunityLibraryProps> = ({ onOpenLesson
     try {
       const params = new URLSearchParams({ sort, page: String(page) });
       if (search) params.set('search', search);
-      const resp = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/community?${params}`);
+      const resp = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/community?${params}`);
       const data = await resp.json();
       setLessons(data.lessons || []);
     } catch {

@@ -3,11 +3,11 @@ Lesson generation engine powered by Gemini's structured outputs.
 Converts raw code + context into interactive lessons.
 """
 
-import google.generativeai as genai
+import google.generativeai as genai  # legacy SDK — will be migrated to google.genai in Phase 7
 import json
 from datetime import datetime
 from typing import Optional
-from .schemas import Lesson, LessonWrapper
+from schemas import Lesson, LessonWrapper
 import os
 
 

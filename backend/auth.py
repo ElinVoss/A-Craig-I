@@ -4,10 +4,12 @@ Handles JWT tokens, password hashing, and auth middleware.
 """
 
 import os
+import hashlib
+import bcrypt
 from datetime import datetime, timedelta
 from typing import Optional, Dict
+from uuid import uuid4
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from pydantic import BaseModel
 import logging
 
@@ -19,12 +21,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
-# Password hashing context (bcrypt with cost=12)
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto",
-    bcrypt__rounds=12
-)
+BCRYPT_ROUNDS = 12
 
 
 class TokenData(BaseModel):
@@ -61,7 +58,7 @@ def hash_password(password: str) -> str:
     Returns:
         Bcrypt hash (will never be the same twice due to salt)
     """
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode('utf-8')
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -75,7 +72,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     Returns:
         True if password matches, False otherwise
     """
-    return pwd_context.verify(plain_password, hashed_password)
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
 
 # ===== JWT TOKEN MANAGEMENT =====
@@ -97,7 +94,8 @@ def create_access_token(user_id: str, email: str) -> str:
         "user_id": str(user_id),
         "email": email,
         "exp": expire,
-        "type": "access"
+        "type": "access",
+        "jti": str(uuid4())
     }
     
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -122,7 +120,8 @@ def create_refresh_token(user_id: str, email: str) -> str:
         "user_id": str(user_id),
         "email": email,
         "exp": expire,
-        "type": "refresh"
+        "type": "refresh",
+        "jti": str(uuid4())
     }
     
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -232,15 +231,10 @@ def validate_password_strength(password: str) -> tuple[bool, str]:
 # ===== TOKEN HASH (for secure storage in DB) =====
 
 def hash_token(token: str) -> str:
-    """
-    Hash a token for secure storage in database.
-    Used for refresh token revocation.
-    """
-    return pwd_context.hash(token)
+    """Hash a refresh token for storage using SHA-256 (tokens can exceed bcrypt's 72-byte limit)."""
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def verify_token_hash(token: str, token_hash: str) -> bool:
-    """
-    Verify a token against its hash.
-    """
-    return pwd_context.verify(token, token_hash)
+    """Verify a token against its SHA-256 hash."""
+    return hashlib.sha256(token.encode()).hexdigest() == token_hash

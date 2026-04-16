@@ -5,9 +5,8 @@ Maps to PostgreSQL schema with full type safety.
 
 from sqlalchemy import (
     Column, String, Text, Integer, Boolean, DateTime, DECIMAL, JSON,
-    ForeignKey, UniqueConstraint, Index, CheckConstraint, func
+    ForeignKey, UniqueConstraint, Index, CheckConstraint, func, Uuid
 )
-from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import declarative_base, relationship
 from uuid import uuid4
 from datetime import datetime
@@ -19,7 +18,7 @@ class User(Base):
     """User account model."""
     __tablename__ = "users"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
     email = Column(String(255), unique=True, nullable=False, index=True)
     username = Column(String(100), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
@@ -49,12 +48,12 @@ class Lesson(Base):
     """Generated lesson model."""
     __tablename__ = "lessons"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     title = Column(String(255), nullable=False)
     description = Column(Text)
     difficulty = Column(String(20))  # beginner, intermediate, advanced
-    lesson_json = Column(JSONB, nullable=False)  # Full lesson from Gemini
+    lesson_json = Column(JSON, nullable=False)  # Full lesson from Gemini
     source_code = Column(Text)  # Original code
     source_url = Column(String(500))  # Where code came from
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -73,7 +72,7 @@ class Lesson(Base):
     fork_count = Column(Integer, default=0)
     upvote_count = Column(Integer, default=0)
     tags_json = Column(JSON, nullable=True)
-    forked_from_id = Column(UUID(as_uuid=True), ForeignKey("lessons.id", ondelete="SET NULL"), nullable=True)
+    forked_from_id = Column(Uuid(as_uuid=False), ForeignKey("lessons.id", ondelete="SET NULL"), nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="lessons")
@@ -94,12 +93,12 @@ class UserProgress(Base):
     """User progress tracking model."""
     __tablename__ = "user_progress"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    lesson_id = Column(UUID(as_uuid=True), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    lesson_id = Column(Uuid(as_uuid=False), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False)
     current_step = Column(Integer, default=0)
-    quiz_scores = Column(JSONB)  # {step_1: 100, step_2: 80}
-    exercise_scores = Column(JSONB)  # {step_2_blank_1: true, ...}
+    quiz_scores = Column(JSON)  # {step_1: 100, step_2: 80}
+    exercise_scores = Column(JSON)  # {step_2_blank_1: true, ...}
     completion_percentage = Column(Integer, default=0)
     is_completed = Column(Boolean, default=False)
     completed_at = Column(DateTime(timezone=True))
@@ -125,9 +124,9 @@ class LessonRating(Base):
     """Lesson rating and review model."""
     __tablename__ = "lesson_ratings"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    lesson_id = Column(UUID(as_uuid=True), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    lesson_id = Column(Uuid(as_uuid=False), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     rating = Column(Integer, nullable=False)
     comment = Column(Text)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -155,9 +154,9 @@ class ReviewCard(Base):
     """
     __tablename__ = "review_cards"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    lesson_id = Column(UUID(as_uuid=True), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    lesson_id = Column(Uuid(as_uuid=False), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False)
 
     # SM-2 state
     easiness_factor = Column(DECIMAL(4, 2), default=2.5)
@@ -189,9 +188,9 @@ class ReviewLog(Base):
     """Every review attempt, immutable. Used for analytics and future FSRS training."""
     __tablename__ = "review_logs"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    card_id = Column(UUID(as_uuid=True), ForeignKey("review_cards.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    card_id = Column(Uuid(as_uuid=False), ForeignKey("review_cards.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     rating = Column(Integer, nullable=False)           # 1=Again, 2=Hard, 3=Good, 4=Easy
     reviewed_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     interval_before = Column(Integer)                  # interval before this review
@@ -207,8 +206,8 @@ class RefreshToken(Base):
     """Refresh token model for logout and security."""
     __tablename__ = "refresh_tokens"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     token_hash = Column(String(255), unique=True, nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -243,13 +242,13 @@ class EngagementEvent(Base):
     """
     __tablename__ = "engagement_events"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    lesson_id = Column(UUID(as_uuid=True), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=True)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    lesson_id = Column(Uuid(as_uuid=False), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=True)
     event_type = Column(String(50), nullable=False)
     step_id = Column(String(100), nullable=True)
     value = Column(DECIMAL(10, 3), nullable=True)
-    metadata = Column(JSON, nullable=True)
+    event_metadata = Column(JSON, nullable=True)
     recorded_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     user = relationship("User", back_populates="engagement_events")
@@ -268,9 +267,9 @@ class EngagementEvent(Base):
 class LessonUpvote(Base):
     __tablename__ = "lesson_upvotes"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    lesson_id = Column(UUID(as_uuid=True), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    lesson_id = Column(Uuid(as_uuid=False), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     __table_args__ = (
