@@ -1,8 +1,15 @@
-# VibeCode - Phase 0 → Phase 1: The Foundation + Teacher Logic
+# VibeCode — The AI-Era Learning Platform
 
-This is the "pipes" that move data from your browser (where you talk to AI) to your backend (where the teaching magic happens).
+> **Turn any AI-generated code into an interactive lesson.** Capture from ChatGPT, Claude, Gemini, GitHub, Stack Overflow, and 9 other platforms. Learn with spaced repetition, live code execution, and job gap analysis. The learning layer for the AI era.
 
-## 🏗️ Project Structure
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new)
+
+**[📖 Full Deployment Guide →](./DEPLOY.md)**
+
+---
+
+## 🏗️ Architecture
 
 ```
 vibe-code-project/
