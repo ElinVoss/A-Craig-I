@@ -1,0 +1,51 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: vibeCode-db
+    environment:
+      POSTGRES_USER: vibeCodeUser
+      POSTGRES_PASSWORD: vibeCodePassword123
+      POSTGRES_DB: vibeCode
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vibeCodeUser -d vibeCode"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vibecode-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vibeCode-backend
+    environment:
+      DATABASE_URL: postgresql://vibeCodeUser:vibeCodePassword123@postgres:5432/vibeCode
+      JWT_SECRET_KEY: change-this-in-production-super-secret-key
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-your-api-key-here}
+      ENVIRONMENT: development
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: python main.py
+    networks:
+      - vibecode-network
+
+volumes:
+  postgres_data:
+
+networks:
+  vibecode-network:
+    driver: bridge
