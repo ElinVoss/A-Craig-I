@@ -46,7 +46,6 @@ services:
         sync: false     # set to your Vercel URL, e.g. https://vibecode.vercel.app
 
     healthCheckPath: /health
-    startCommand: "bash /app/start.sh"
 
 databases:
   - name: vibecode-db
