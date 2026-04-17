@@ -28,20 +28,18 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="VibeCode Engine", version="2.0.0")
 
-# CORS: wildcard in dev, locked to FRONTEND_URL + Chrome extension in production
+# CORS: wildcard in dev, locked to FRONTEND_URL + Vercel previews + Chrome extension in production
 _env = os.getenv("ENVIRONMENT", "development")
 if _env == "production":
     _frontend = os.getenv("FRONTEND_URL", "")
-    _origins = [o.strip() for o in _frontend.split(",") if o.strip()] + [
-        "chrome-extension://*",  # Chrome extension always allowed
-    ]
+    _origins = [o.strip() for o in _frontend.split(",") if o.strip()]
 else:
     _origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
-    allow_origin_regex=r"chrome-extension://.*" if _env == "production" else None,
+    allow_origin_regex=r"(https://.*\.vercel\.app|chrome-extension://.*)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
