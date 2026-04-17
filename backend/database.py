@@ -13,24 +13,26 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Get database URL from environment
-DATABASE_URL = os.getenv(
+_raw_url = os.getenv(
     "DATABASE_URL",
     "postgresql+psycopg://user:password@localhost:5432/vibeCode"
 )
+# Render (and many hosts) provide postgres:// or postgresql:// — rewrite for psycopg3
+if _raw_url.startswith("postgres://"):
+    _raw_url = _raw_url.replace("postgres://", "postgresql+psycopg://", 1)
+elif _raw_url.startswith("postgresql://") and "+psycopg" not in _raw_url:
+    _raw_url = _raw_url.replace("postgresql://", "postgresql+psycopg://", 1)
+DATABASE_URL = _raw_url
 
 # Create engine with connection pooling
 engine = create_engine(
     DATABASE_URL,
     poolclass=QueuePool,
-    pool_size=10,  # Number of connections to keep pooled
-    max_overflow=20,  # Maximum number of connections to create
-    pool_recycle=3600,  # Recycle connections after 1 hour
-    pool_pre_ping=True,  # Verify connection before using (detects dead connections)
-    echo=False,  # Set to True for SQL logging during development
-    connect_args={
-        "connect_timeout": 10,
-        "application_name": "vibeCode"
-    }
+    pool_size=10,
+    max_overflow=20,
+    pool_recycle=3600,
+    pool_pre_ping=True,
+    echo=False,
 )
 
 # Create session factory
